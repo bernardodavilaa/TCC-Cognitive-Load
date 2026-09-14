@@ -1,9 +1,16 @@
 acquired-router-470921-a3-a19e3f67c416.json
 supakeys.json
 
+# Credenciais locais
+.env
+.env.*
+service_account.json
+*-service-account*.json
+tcc-cognitive-load-*.json
+
 *.pyc
 
 *.vscode
 
 test.py
-config.py
+config.py   
