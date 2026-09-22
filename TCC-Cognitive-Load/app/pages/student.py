@@ -12,6 +12,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 import gradio as gr
 
 from services.docs import createChatPdf
+from services.profile_provider import build_interim_profile
 from services.script_builder import buildCustomScript
 from services.supabase_client import (
     SupabaseConfigurationError,
@@ -19,8 +20,10 @@ from services.supabase_client import (
     create_chat_record,
     download_file_from_bucket,
     fetch_student_document_metadata,
+    fetch_student_profile,
     list_student_chats,
     upload_file_to_bucket,
+    upsert_student_profile,
 )
 from services.vertex_client import VERTEX_CFG, _vertex_err, summarize_chat_history
 
@@ -28,6 +31,7 @@ from app.config import (
     SUPABASE_CHAT_BUCKET,
     SUPABASE_CHAT_STORAGE_PREFIX,
     SUPABASE_CLASS_DOCS_BUCKET,
+    SUPABASE_PROFILE_TABLE,
     SUPABASE_SERVICE_ROLE_KEY,
     SUPABASE_URL,
     SUPABASE_USERS_TABLE,
@@ -371,7 +375,7 @@ def _student_subtheme_choices(cls_id: Optional[str], subjects_by_class: Dict[str
     return [s["name"] for s in lst if s.get("active", True)]
 
 
-def student_setup_from_class(selected_id, classrooms, subjects_by_class, current_adv):
+def student_setup_from_class(selected_id, classrooms, subjects_by_class, current_adv, auth_state=None):
     c = _get_class_by_id(classrooms, selected_id)
     if not c:
         return (
@@ -385,6 +389,9 @@ def student_setup_from_class(selected_id, classrooms, subjects_by_class, current
             gr.update(visible=False),
             current_adv or {},
             "Warning: Sala não encontrada.",
+            gr.update(value=""),
+            gr.update(value="não"),
+            gr.update(value=1),
         )
 
     assunto = c.get("theme_name") or c.get("name") or ""
@@ -399,17 +406,46 @@ def student_setup_from_class(selected_id, classrooms, subjects_by_class, current
         "top_k": int(adv.get("top_k", 40)),
         "max_tokens": int(adv.get("max_tokens", 1024)),
     }
+
+    # Defaults da sala (config. do professor); o perfil persistido do aluno,
+    # quando existir, tem prioridade sobre estilo/detalhamento/interesses.
+    estilo = script.get("estilo", "simples")
+    detalhamento = script.get("detalhamento", "detalhadas")
+    interesses = ""
+    curso_periodo = ""
+    contato_previo = "não"
+    autoavaliacao = 1
+
+    student_id = _auth_user_id(auth_state)
+    if student_id:
+        try:
+            profile = fetch_student_profile(
+                SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_PROFILE_TABLE, student_id
+            )
+        except Exception:
+            profile = None
+        if profile:
+            estilo = profile.get("estilo_preferido") or estilo
+            detalhamento = profile.get("detalhamento_preferido") or detalhamento
+            interesses = profile.get("interesses") or interesses
+            curso_periodo = profile.get("curso_periodo") or curso_periodo
+            contato_previo = profile.get("contato_previo") or contato_previo
+            autoavaliacao = profile.get("autoavaliacao") or autoavaliacao
+
     return (
         gr.update(value=assunto),
         gr.update(choices=st_choices, value=[]),
-        gr.update(value=script.get("estilo", "simples")),
-        gr.update(value=script.get("detalhamento", "detalhadas")),
+        gr.update(value=estilo),
+        gr.update(value=detalhamento),
         gr.update(value=""),
-        gr.update(value=""),
+        gr.update(value=interesses),
         gr.update(visible=True),
         gr.update(visible=False),
         new_adv,
         "OK: Parâmetros da sala aplicados.",
+        gr.update(value=curso_periodo),
+        gr.update(value=contato_previo),
+        gr.update(value=autoavaliacao),
     )
 
 
@@ -658,6 +694,11 @@ def student_apply_setup(
     interesses,
     subthemes,
     script_state,
+    classrooms=None,
+    prior_experience=None,
+    self_rating=None,
+    auth_state=None,
+    curso_periodo=None,
 ):
     extras = _build_extras_from_classroom(theme, subthemes, interesses)
     new_script = buildCustomScript(
@@ -669,7 +710,37 @@ def student_apply_setup(
         subtemas=subthemes,
         interesses=interesses,
     )
-    return new_script, gr.update(visible=False), gr.update(visible=True)
+
+    classroom = _get_class_by_id(classrooms or [], cid)
+    page_context = {
+        "enabled": bool((classroom or {}).get("page_enabled")),
+        "profile": build_interim_profile(
+            estilo, detalhamento, interesses, prior_experience, self_rating
+        ),
+        "subject": theme,
+    }
+
+    # Persiste/enriquece o perfil cognitivo-afetivo do aluno a cada sessão
+    # (memória não-paramétrica consumida pelo PAGE em sessões futuras).
+    student_id = _auth_user_id(auth_state)
+    if student_id:
+        try:
+            upsert_student_profile(
+                SUPABASE_URL,
+                SUPABASE_SERVICE_ROLE_KEY,
+                SUPABASE_PROFILE_TABLE,
+                student_id,
+                curso_periodo=(curso_periodo or "").strip() or None,
+                contato_previo=(prior_experience or "").strip() or None,
+                interesses=(interesses or "").strip() or None,
+                estilo_preferido=(estilo or "").strip() or None,
+                detalhamento_preferido=(detalhamento or "").strip() or None,
+                autoavaliacao=int(self_rating) if self_rating not in (None, "") else None,
+            )
+        except Exception as exc:  # pragma: no cover - não deve bloquear o chat
+            print(f"[PROFILE] Falha ao salvar perfil do aluno: {exc}")
+
+    return new_script, gr.update(visible=False), gr.update(visible=True), page_context
 
 
 def _student_chat_back_to_setup():
@@ -1018,6 +1089,7 @@ def build_student_views(
     student_history_transcript = gr.State("")
     student_download_path = gr.State(None)
     student_documents_state = gr.State([])
+    page_profile_state = gr.State({})
 
     with gr.Column(visible=False) as viewStudentRooms:
         gr.Markdown("## 🎒 Minhas Salas")
@@ -1101,6 +1173,10 @@ def build_student_views(
             with gr.Column(scale=1) as stCfgCol:
                 stAssunto = gr.Textbox(
                     label="1) Assunto (tema da sala)", interactive=False)
+                stCursoPeriodo = gr.Textbox(
+                    label="Curso e período atual",
+                    placeholder="Ex: Ciência da Computação, 2º período",
+                )
                 stSubthemes = gr.CheckboxGroup(choices=[], label="2) Subtemas")
                 stEstilo = gr.Radio(
                     choices=["técnicas", "simples"], value="simples", label="3) Estilo de linguagem")
@@ -1114,6 +1190,18 @@ def build_student_views(
                 stInteresses = gr.Textbox(
                     label="6) Temas de interesse",
                     placeholder="Ex: futebol, games, música",
+                )
+                stPriorExperience = gr.Radio(
+                    choices=["sim", "não", "um pouco"],
+                    value="não",
+                    label="7) Você já teve contato com programação antes desta disciplina?",
+                )
+                stSelfRating = gr.Slider(
+                    1,
+                    5,
+                    value=1,
+                    step=1,
+                    label="8) Como você avalia seu nível atual no conteúdo de hoje? (1 = nunca vi isso antes; 5 = já tenho boa base)",
                 )
                 gr.Markdown(
                     "_Correlacione com um assunto que você conhece para aprender melhor!_")
@@ -1192,7 +1280,7 @@ def build_student_views(
 
     setup_evt = stEnterRoomChatSetup.click(
         student_setup_from_class,
-        inputs=[stRoomSelect, classrooms_state, subjects_state, adv_state],
+        inputs=[stRoomSelect, classrooms_state, subjects_state, adv_state, auth_state],
         outputs=[
             stAssunto,
             stSubthemes,
@@ -1204,6 +1292,9 @@ def build_student_views(
             stChatCol,
             adv_state,
             stProvider,
+            stCursoPeriodo,
+            stPriorExperience,
+            stSelfRating,
         ],
     )
 
@@ -1225,8 +1316,13 @@ def build_student_views(
             stInteresses,
             stSubthemes,
             script_state,
+            classrooms_state,
+            stPriorExperience,
+            stSelfRating,
+            auth_state,
+            stCursoPeriodo,
         ],
-        outputs=[script_state, stCfgCol, stChatCol],
+        outputs=[script_state, stCfgCol, stChatCol, page_profile_state],
     )
 
     stChatInput.submit(
@@ -1238,7 +1334,7 @@ def build_student_views(
     ).then(
         bot,
         inputs=[stChatbot, docs_state, script_state,
-                adv_state, current_chat_id, chats_state],
+                adv_state, current_chat_id, chats_state, page_profile_state],
         outputs=stChatbot,
     ).then(_student_chat_enable, outputs=stChatInput)
 

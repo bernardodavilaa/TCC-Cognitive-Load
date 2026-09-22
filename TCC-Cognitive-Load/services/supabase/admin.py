@@ -32,7 +32,7 @@ def fetch_classroom_domain(
         classrooms_resp = (
             client.table("classrooms")
             .select(
-                "id,name,description,theme_name,theme_config,theme_locked,is_archived,created_by"
+                "id,name,description,theme_name,theme_config,theme_locked,page_enabled,is_archived,created_by"
             )
             .order("name")
             .execute()
@@ -238,6 +238,7 @@ def fetch_classroom_domain(
                 "theme_name": raw.get("theme_name"),
                 "theme_config": raw.get("theme_config") or {},
                 "theme_locked": bool(raw.get("theme_locked")),
+                "page_enabled": bool(raw.get("page_enabled")),
                 "is_archived": bool(raw.get("is_archived")),
                 "created_by": raw.get("created_by"),
                 "owner_id": owner_id,
@@ -335,6 +336,7 @@ def create_classroom_record(
     theme_locked: bool,
     created_by: str,
     theme_config: Optional[Dict[str, Any]] = None,
+    page_enabled: bool = False,
 ) -> Dict[str, Any]:
     """Create a classroom entry."""
 
@@ -345,6 +347,7 @@ def create_classroom_record(
         "theme_locked": bool(theme_locked),
         "created_by": created_by,
         "theme_config": theme_config,
+        "page_enabled": bool(page_enabled),
     }
 
     client = _get_client(url, key)

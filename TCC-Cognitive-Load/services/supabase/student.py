@@ -296,3 +296,73 @@ def fetch_student_document_metadata(
 
 
 __all__.append("fetch_student_document_metadata")
+
+
+def fetch_student_profile(
+    url: str,
+    key: str,
+    table: str,
+    student_id: str,
+) -> Optional[Dict[str, Any]]:
+    """Fetch the persisted cognitive-affective profile for a student, if any."""
+
+    if not student_id:
+        return None
+
+    client = _get_client(url, key)
+    try:
+        response = (
+            client.table(table)
+            .select(
+                "curso_periodo,contato_previo,interesses,estilo_preferido,"
+                "detalhamento_preferido,autoavaliacao,updated_at"
+            )
+            .eq("student_id", student_id)
+            .limit(1)
+            .execute()
+        )
+    except APIError as err:
+        raise _handle_api_error(err) from err
+    except Exception as exc:  # pragma: no cover - erros inesperados de client
+        raise SupabaseOperationError(str(exc)) from exc
+
+    data = response.data or []
+    return data[0] if data else None
+
+
+__all__.append("fetch_student_profile")
+
+
+def upsert_student_profile(
+    url: str,
+    key: str,
+    table: str,
+    student_id: str,
+    **fields: Any,
+) -> Dict[str, Any]:
+    """Create or update the persisted cognitive-affective profile of a student."""
+
+    if not student_id:
+        raise SupabaseOperationError("Identificador do aluno ausente para salvar o perfil.")
+
+    payload: Dict[str, Any] = {"student_id": student_id}
+    payload.update(fields)
+    payload["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+    client = _get_client(url, key)
+    try:
+        response = (
+            client.table(table)
+            .upsert(payload, on_conflict="student_id")
+            .execute()
+        )
+    except APIError as err:
+        raise _handle_api_error(err) from err
+    except Exception as exc:  # pragma: no cover - erros inesperados de client
+        raise SupabaseOperationError(str(exc)) from exc
+
+    data = response.data or [payload]
+    return data[0]
+
+
+__all__.append("upsert_student_profile")

@@ -81,6 +81,50 @@ def test_fetch_users_by_role_inclui_novo_aluno(cfg, make_login_user):
     assert any(u.username == username for u in alunos)
 
 
+def test_create_user_com_matricula_login_por_email_e_matricula(
+    cfg, sb_client, _hash_pw, entities
+):
+    """Fluxo de pré-cadastro: login = e-mail, senha inicial = matrícula."""
+    t = tag("auth_")
+    email = f"{t}@pucminas.br"
+    matricula = "2026" + t[-6:]
+
+    rec = create_user_record(
+        cfg.SUPABASE_URL,
+        cfg.SUPABASE_SERVICE_ROLE_KEY,
+        cfg.SUPABASE_USERS_TABLE,
+        login=email,
+        password_hash=_hash_pw(matricula),
+        role="student",
+        username=email,
+        full_name=f"Pytest {t}",
+        matricula=matricula,
+    )
+    entities.on_cleanup(
+        lambda: sb_client.table(cfg.SUPABASE_USERS_TABLE)
+        .delete()
+        .eq("id", rec.id)
+        .execute()
+    )
+
+    entry = fetch_user_record(
+        cfg.SUPABASE_URL, cfg.SUPABASE_SERVICE_ROLE_KEY, cfg.SUPABASE_USERS_TABLE, email
+    )
+    assert entry is not None
+    assert entry.username == email
+    # mesma lógica de comparação usada em app.pages.auth.doLogin
+    assert entry.password_hash == _hash_pw(matricula)
+
+    raw = (
+        sb_client.table(cfg.SUPABASE_USERS_TABLE)
+        .select("matricula")
+        .eq("id", rec.id)
+        .single()
+        .execute()
+    )
+    assert raw.data["matricula"] == matricula
+
+
 def test_fetch_user_record_inexistente(cfg):
     assert (
         fetch_user_record(

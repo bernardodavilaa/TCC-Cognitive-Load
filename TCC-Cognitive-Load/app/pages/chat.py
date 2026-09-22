@@ -8,6 +8,7 @@ from dataclasses import dataclass
 import gradio as gr
 
 from services.docs import extractPdfText
+from services.page_prompt_builder import build_page_messages
 from services.script_builder import buildCustomScript
 from services.vertex_client import VERTEX_CFG, _streamFromVertex, _vertex_err
 
@@ -89,8 +90,20 @@ def addMessage(history, message, docsState, authState, currentChatId, chatsState
     )
 
 
-def bot(history, docsState, scriptState, advState, currentChatId, chatsState):
-    """Stream model responses and persist them into the chat map."""
+def bot(history, docsState, scriptState, advState, currentChatId, chatsState, page_context=None):
+    """Stream model responses and persist them into the chat map.
+
+    `page_context` é `None` (padrão, chat livre e salas do grupo controle) ou
+    um dict `{"enabled": bool, "profile": dict, "subject": str}` montado em
+    `student.student_apply_setup` a partir da sala atual. Quando ausente ou
+    com `enabled` falso, o comportamento é idêntico ao original: streaming
+    direto da resposta base. Quando `enabled` é True (sala do grupo
+    experimental), a resposta base é gerada em segundo plano e reformatada
+    pelo Módulo PAGE (`services.page_prompt_builder`) antes de ser
+    transmitida ao aluno; só a versão contextualizada chega à UI e é
+    persistida. Se a reformatação falhar por qualquer motivo, cai de volta
+    silenciosamente pra resposta base já gerada.
+    """
     docsPreview = ""
     if isinstance(docsState, dict) and docsState:
         joined = []
@@ -105,17 +118,47 @@ def bot(history, docsState, scriptState, advState, currentChatId, chatsState):
     }
     messages = [systemMsg] + history
     history.append({"role": "assistant", "content": ""})
+    adv = advState if isinstance(advState, dict) else {}
+    page_context = page_context if isinstance(page_context, dict) else {}
+    page_enabled = bool(page_context.get("enabled"))
 
     try:
-        adv = advState if isinstance(advState, dict) else {}
-        for delta in _streamFromVertex(messages, VERTEX_CFG, adv):
-            history[-1]["content"] += delta
-            yield history
+        if not page_enabled:
+            for delta in _streamFromVertex(messages, VERTEX_CFG, adv):
+                history[-1]["content"] += delta
+                yield history
+            final_text = history[-1]["content"]
+        else:
+            base_text = "".join(_streamFromVertex(messages, VERTEX_CFG, adv))
+            final_text = base_text
+            try:
+                page_messages = build_page_messages(
+                    base_text,
+                    page_context.get("profile"),
+                    subject=page_context.get("subject") or "",
+                )
+                history[-1]["content"] = ""
+                reformatted = ""
+                for delta in _streamFromVertex(page_messages, VERTEX_CFG, adv):
+                    reformatted += delta
+                    history[-1]["content"] = reformatted
+                    yield history
+                if reformatted.strip():
+                    final_text = reformatted
+                else:
+                    history[-1]["content"] = final_text
+                    yield history
+            except Exception:
+                # Módulo PAGE indisponível: cai de volta pra resposta base já
+                # gerada, sem expor erro técnico ao aluno.
+                history[-1]["content"] = final_text
+                yield history
+
         if currentChatId and isinstance(chatsState, dict) and currentChatId in chatsState:
             chatsState[currentChatId]["messages"].append(
                 {
                     "role": "assistant",
-                    "content": history[-1]["content"],
+                    "content": final_text,
                     "ts": _now_ts(),
                 }
             )

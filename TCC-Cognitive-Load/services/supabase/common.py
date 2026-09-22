@@ -333,6 +333,7 @@ def create_user_record(
     username: Optional[str] = None,
     full_name: Optional[str] = None,
     display_name: Optional[str] = None,
+    matricula: Optional[str] = None,
 ) -> UserRecord:
     """Create a new user record in Supabase."""
 
@@ -351,6 +352,8 @@ def create_user_record(
         "password_hash": password_hash,
         "role": role,
     }
+    if matricula is not None:
+        payload["matricula"] = (matricula or "").strip() or None
 
     client = _get_client(url, key)
     try:
