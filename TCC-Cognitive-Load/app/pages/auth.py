@@ -58,25 +58,27 @@ class AuthViews:
 def build_auth_views(*, blocks: gr.Blocks, vertex_cfg: Dict[str, Any], vertex_err: Optional[str]) -> AuthViews:
     """Create header, login and shared home sections."""
     header_msg = "### 👋 Bem-vindo! Faça login para continuar."
-    #Message to those utilizing the plataform
-    aviso_msg = """# Aviso aos Usuários:
-                A todos utilizando a plataforma, agradeço imensamente por utilizarem o projeto!
-                
-                **No link abaixo eu criei um breve questionário sobre sua experiência com a plataforma, e gostaria que respondessem assim que terminarem de utilizar o chat.**
-                
-                "https://forms.gle/gfHCMKigWojFUpcU9"
-                
-                **Ficarei aguardando respostas até segunda-feira, dia 24/11/2025 à noite, por volta das 20h** marcando o fim do período de coleta de dados.
-                
-                ## NÃO HAVERÁ EXTENSÃO DO PERÍODO DE COLETA DE DADOS, E RESPOSTAS RECEBIDAS APÓS SERÃO DESCONSIDERADAS.
-                
-                Os pontos extras serão distribuídos para aqueles que utilizaram o chat por no mínimo 30 minutos **e responderam ao questionário**.
-                
-                Para aqueles que gostaram da experiência, informo que **vou alterar o modelo da IA para o Gemini Pro** na noite de hoje, que será mantido **até os créditos da GCP acabarem**, ou até o dia **02/12/2025** quando o free trial da Vertex encerra.
-                
-                **Mais uma vez, sou extremamente e imensamente grato pela ajuda!**
+    # Mensagem de boas-vindas / instruções para os participantes da pesquisa.
+    # TODO(Bernardo): preencher [PRAZO], [LINK_QUESTIONARIO] e [CONTATO] com os
+    # dados reais assim que definidos com a orientadora.
+    aviso_msg = """# Bem-vindo(a) à pesquisa do TCC!
+
+                Este é o tutor de programação com IA personalizada, desenvolvido como parte
+                do meu Trabalho de Conclusão de Curso na PUC Minas. Muito obrigado por
+                participar!
+
+                **Como entrar:** se você fez o pré-cadastro, use seu **e-mail institucional
+                PUC** como usuário e sua **matrícula** como senha.
+
+                **Ao final da sua sessão**, responda ao questionário de avaliação:
+                "[LINK_QUESTIONARIO]"
+
+                **Prazo para participação:** até [PRAZO].
+
+                Dúvidas? Fale comigo: [CONTATO]
+
                 ---
-                **— Augusto Scardua**
+                **— Bernardo D'Ávila Rodrigues Bartholomeu**
                 """
     if vertex_err:
         header_msg += f"\n\n> **Atenção**: {vertex_err}"
@@ -92,6 +94,10 @@ def build_auth_views(*, blocks: gr.Blocks, vertex_cfg: Dict[str, Any], vertex_er
     with gr.Column(visible=True) as viewLogin:
         gr.Markdown("## 🔐 Login / Registro")
         authMode = gr.Radio(["Login", "Registrar"], value="Login", label="Modo de acesso")
+        loginHint = gr.Markdown(
+            "💡 **Alunos pré-cadastrados**: use seu e-mail institucional PUC como "
+            "usuário e o número da sua matrícula como senha."
+        )
         with gr.Row():
             username = gr.Textbox(label="Usuário", placeholder="ex: augusto")
             password = gr.Textbox(label="Senha", type="password", placeholder="••••••••")
@@ -127,7 +133,7 @@ def build_auth_views(*, blocks: gr.Blocks, vertex_cfg: Dict[str, Any], vertex_er
     authMode.change(
         switch_auth_mode,
         inputs=authMode,
-        outputs=[registerRow, registerRoleRow, btnLogin, btnRegister, confirmPassword, loginMsg],
+        outputs=[registerRow, registerRoleRow, btnLogin, btnRegister, confirmPassword, loginMsg, loginHint],
     )
 
     return AuthViews(
@@ -240,6 +246,7 @@ def switch_auth_mode(mode):
         gr.update(visible=is_register),
         gr.update(visible=is_register, value=""),
         gr.update(value=""),
+        gr.update(visible=not is_register),
     )
 
 
