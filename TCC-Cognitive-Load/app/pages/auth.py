@@ -59,15 +59,18 @@ def build_auth_views(*, blocks: gr.Blocks, vertex_cfg: Dict[str, Any], vertex_er
     """Create header, login and shared home sections."""
     header_msg = "### 👋 Bem-vindo! Faça login para continuar."
     # Mensagem de boas-vindas / instruções para os participantes da pesquisa.
-    # TODO(Bernardo): preencher [PRAZO], [LINK_QUESTIONARIO] e [CONTATO] com os
-    # dados reais assim que definidos com a orientadora.
+    # TODO(Bernardo): ainda falta preencher [PRAZO], [LINK_QUESTIONARIO]
+    # (questionário pós-sessão) e [CONTATO] com os dados reais.
     aviso_msg = """# Bem-vindo(a) à pesquisa do TCC!
 
                 Este é o tutor de programação com IA personalizada, desenvolvido como parte
                 do meu Trabalho de Conclusão de Curso na PUC Minas. Muito obrigado por
                 participar!
 
-                **Como entrar:** se você fez o pré-cadastro, use seu **e-mail institucional
+                **Ainda não fez o pré-cadastro?** Preencha aqui antes de tentar entrar:
+                "https://docs.google.com/forms/d/e/1FAIpQLScU8xUbqZPDLqPbpwhat3zF3ukb7j83MQTVox6m1m8vPyVtiQ/viewform"
+
+                **Como entrar:** se você já fez o pré-cadastro, use seu **e-mail institucional
                 PUC** como usuário e sua **matrícula** como senha.
 
                 **Ao final da sua sessão**, responda ao questionário de avaliação:
