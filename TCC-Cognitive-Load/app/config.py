@@ -60,6 +60,14 @@ SUPABASE_PROFILE_TABLE = os.environ.get(
     "SUPABASE_PROFILE_TABLE", "perfil_cognitivo_afetivo"
 )
 
+# Rastreabilidade de acesso (login) e avaliação pós-chat (Paas/Likert)
+SUPABASE_ACCESS_LOGS_TABLE = os.environ.get(
+    "SUPABASE_ACCESS_LOGS_TABLE", "access_logs"
+)
+SUPABASE_EVALUATIONS_TABLE = os.environ.get(
+    "SUPABASE_EVALUATIONS_TABLE", "student_evaluations"
+)
+
 # Buckets do Supabase Storage (crie-os no painel -> Storage e mantenha os
 # mesmos nomes aqui). O prefixo é apenas a "pasta" raiz dentro do bucket.
 SUPABASE_CHAT_BUCKET = os.environ.get("SUPABASE_CHAT_BUCKET", "chat-pdfs")

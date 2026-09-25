@@ -367,6 +367,40 @@ def create_user_record(
     return UserRecord.from_raw(data[0])
 
 
+def log_access_event(
+    url: str,
+    key: str,
+    table: str,
+    *,
+    user_id: str,
+    role: Optional[str] = None,
+    event: str = "login",
+) -> None:
+    """Registra um evento de acesso (ex.: login) para rastreabilidade de uso.
+
+    Nunca levanta exceção para o chamador não precisar tratar falha de log
+    como falha de autenticação; erros são propagados via SupabaseOperationError
+    apenas se o chamador optar por não capturá-los.
+    """
+
+    if not user_id:
+        return
+
+    payload: Dict[str, Any] = {
+        "user_id": user_id,
+        "role": role,
+        "event": event,
+    }
+
+    client = _get_client(url, key)
+    try:
+        client.table(table).insert(payload).execute()
+    except APIError as err:
+        raise _handle_api_error(err) from err
+    except Exception as exc:
+        raise SupabaseOperationError(str(exc)) from exc
+
+
 def fetch_users_by_role(
     url: str,
     key: str,
@@ -791,4 +825,5 @@ __all__ = [
     "fetch_users_by_role",
     "_fetch_users_map",
     "reset_cached_client",
+    "log_access_event",
 ]

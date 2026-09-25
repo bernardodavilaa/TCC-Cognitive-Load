@@ -18,6 +18,7 @@ from services.supabase_client import (
     SupabaseConfigurationError,
     SupabaseOperationError,
     create_chat_record,
+    create_session_evaluation,
     download_file_from_bucket,
     fetch_student_document_metadata,
     fetch_student_profile,
@@ -31,6 +32,7 @@ from app.config import (
     SUPABASE_CHAT_BUCKET,
     SUPABASE_CHAT_STORAGE_PREFIX,
     SUPABASE_CLASS_DOCS_BUCKET,
+    SUPABASE_EVALUATIONS_TABLE,
     SUPABASE_PROFILE_TABLE,
     SUPABASE_SERVICE_ROLE_KEY,
     SUPABASE_URL,
@@ -813,6 +815,7 @@ def student_end_chat(
             docs,
             active_chat_id,
             chats_map,
+            None,
         )
 
     student_id = (auth_state or {}).get("user_id")
@@ -994,6 +997,13 @@ def student_end_chat(
         "[CHAT] PDF enviado para Storage -> bucket='%s' path='%s' chat='%s'%s"
         % (SUPABASE_CHAT_BUCKET, stored_path, storage_chat_id, supabase_tag)
     )
+    gr.Info("Antes de continuar, avalie rapidinho sua experiência 👇")
+
+    chat_context = {
+        "chat_id": supabase_chat_id,
+        "classroom_id": selected_class,
+        "page_enabled": bool((selected_classroom or {}).get("page_enabled")),
+    }
 
     return (
         gr.update(visible=False),
@@ -1004,7 +1014,50 @@ def student_end_chat(
         {},
         None,
         chats_map,
+        chat_context,
     )
+
+
+def student_submit_evaluation(
+    chat_context,
+    auth_state,
+    paas,
+    utilidade,
+    exemplos,
+    qualidade,
+    nps,
+    comentario,
+):
+    """Salva a avaliação pós-chat (escala de Paas + Likert) do aluno."""
+
+    student_id = (auth_state or {}).get("user_id")
+    context = chat_context if isinstance(chat_context, dict) else {}
+
+    if not student_id:
+        gr.Warning("Não foi possível identificar o aluno logado; avaliação não salva.")
+        return gr.update(visible=False), gr.update(visible=True), ""
+
+    try:
+        create_session_evaluation(
+            SUPABASE_URL,
+            SUPABASE_SERVICE_ROLE_KEY,
+            SUPABASE_EVALUATIONS_TABLE,
+            chat_id=context.get("chat_id"),
+            student_id=student_id,
+            classroom_id=context.get("classroom_id"),
+            page_enabled=context.get("page_enabled"),
+            paas_score=int(paas),
+            utilidade=int(utilidade),
+            exemplos=int(exemplos),
+            qualidade=int(qualidade),
+            nps=int(nps),
+            comentario=comentario,
+        )
+        gr.Info("Obrigado pela avaliação! 🙏")
+    except Exception as exc:  # pragma: no cover - não deve travar a navegação
+        gr.Warning(f"Não foi possível salvar sua avaliação: {exc}")
+
+    return gr.update(visible=False), gr.update(visible=True), ""
 
 
 def _render_progress_md(chats_map: Optional[Dict[str, Any]], user_filter: Optional[str] = None) -> str:
@@ -1090,6 +1143,7 @@ def build_student_views(
     student_download_path = gr.State(None)
     student_documents_state = gr.State([])
     page_profile_state = gr.State({})
+    last_chat_context_state = gr.State({})
 
     with gr.Column(visible=False) as viewStudentRooms:
         gr.Markdown("## 🎒 Minhas Salas")
@@ -1232,6 +1286,40 @@ def build_student_views(
                     interactive=True,
                 )
 
+    with gr.Column(visible=False) as viewStudentEvaluation:
+        gr.Markdown("## 📝 Avalie sua experiência")
+        gr.Markdown(
+            "Sua resposta é rápida e ajuda muito a pesquisa do TCC — obrigado!"
+        )
+        evalPaas = gr.Slider(
+            1, 9, value=5, step=1,
+            label="Quanto esforço mental essa sessão exigiu? "
+                  "(1 = muito baixo, 9 = muito alto)",
+        )
+        evalUtilidade = gr.Slider(
+            1, 5, value=3, step=1, label="O quão útil foi essa sessão?"
+        )
+        evalExemplos = gr.Slider(
+            1, 5, value=3, step=1,
+            label="Os exemplos/explicações fizeram sentido pro seu contexto pessoal?",
+        )
+        evalQualidade = gr.Slider(
+            1, 5, value=3, step=1, label="Qualidade geral das explicações do tutor?"
+        )
+        evalNps = gr.Slider(
+            1, 5, value=3, step=1,
+            label="Você recomendaria essa ferramenta pra um colega?",
+        )
+        evalComentario = gr.Textbox(
+            label="Comentário (opcional)", lines=2, placeholder="O que você achou?"
+        )
+        gr.Markdown(
+            "Também responda ao [questionário completo](\"[LINK_QUESTIONARIO]\") "
+            "— ajuda ainda mais na pesquisa!"
+        )
+        btnSubmitEval = gr.Button("Enviar avaliação", variant="primary")
+        evalMsg = gr.Markdown("")
+
     stRoomsRefresh.click(
         student_rooms_refresh,
         inputs=[auth_state, classrooms_state, subjects_state],
@@ -1357,13 +1445,14 @@ def build_student_views(
         ],
         outputs=[
             viewStudentSetup,
-            viewStudentRooms,
+            viewStudentEvaluation,
             stCfgCol,
             stChatCol,
             stChatbot,
             docs_state,
             current_chat_id,
             chats_state,
+            last_chat_context_state,
         ],
     ).then(
         student_rooms_refresh,
@@ -1417,6 +1506,21 @@ def build_student_views(
     #    inputs=None,
     #    outputs=[viewStudentSetup, viewStudentRooms],
     #)
+
+    btnSubmitEval.click(
+        student_submit_evaluation,
+        inputs=[
+            last_chat_context_state,
+            auth_state,
+            evalPaas,
+            evalUtilidade,
+            evalExemplos,
+            evalQualidade,
+            evalNps,
+            evalComentario,
+        ],
+        outputs=[viewStudentEvaluation, viewStudentRooms, evalMsg],
+    )
 
     stHistoryRefresh.click(
         student_history_refresh,

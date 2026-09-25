@@ -15,11 +15,13 @@ from services.supabase_client import (
     create_user_record,
     fetch_user_record,
     fetch_users_by_role,
+    log_access_event,
 )
 
 from app.config import (
     ROLE_DB_TO_PT,
     ROLE_PT_TO_DB,
+    SUPABASE_ACCESS_LOGS_TABLE,
     SUPABASE_SERVICE_ROLE_KEY,
     SUPABASE_URL,
     SUPABASE_USERS_TABLE,
@@ -347,6 +349,18 @@ def doLogin(username, password, authState):
         "display_name": display_name,
     }
     print(f"[AUTH] doLogin: sucesso -> {authState}")
+
+    # Rastreabilidade de uso: nunca bloqueia o login se o log falhar.
+    try:
+        log_access_event(
+            SUPABASE_URL,
+            SUPABASE_SERVICE_ROLE_KEY,
+            SUPABASE_ACCESS_LOGS_TABLE,
+            user_id=entry.id,
+            role=mapped_role,
+        )
+    except Exception as exc:  # pragma: no cover - não deve bloquear o login
+        print(f"[AUTH] Falha ao registrar access_log: {exc}")
     return (
         gr.update(
             value=f"OK: Bem-vindo, **{display_name}** (usuário: {stored_username} · perfil: {mapped_role})."

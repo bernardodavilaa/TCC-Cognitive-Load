@@ -366,3 +366,52 @@ def upsert_student_profile(
 
 
 __all__.append("upsert_student_profile")
+
+
+def create_session_evaluation(
+    url: str,
+    key: str,
+    table: str,
+    *,
+    chat_id: Optional[str],
+    student_id: str,
+    classroom_id: Optional[str],
+    page_enabled: Optional[bool],
+    paas_score: int,
+    utilidade: int,
+    exemplos: int,
+    qualidade: int,
+    nps: int,
+    comentario: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Registra a avaliação pós-chat do aluno (escala de Paas + Likert)."""
+
+    if not student_id:
+        raise SupabaseOperationError("Identificador do aluno ausente para salvar a avaliação.")
+
+    payload: Dict[str, Any] = {
+        "chat_id": chat_id,
+        "student_id": student_id,
+        "classroom_id": classroom_id,
+        "page_enabled": page_enabled,
+        "paas_score": paas_score,
+        "utilidade": utilidade,
+        "exemplos": exemplos,
+        "qualidade": qualidade,
+        "nps": nps,
+        "comentario": (comentario or "").strip() or None,
+    }
+
+    client = _get_client(url, key)
+    try:
+        response = client.table(table).insert(payload).execute()
+    except APIError as err:
+        raise _handle_api_error(err) from err
+    except Exception as exc:  # pragma: no cover - erros inesperados de client
+        raise SupabaseOperationError(str(exc)) from exc
+
+    data = response.data or [payload]
+    return data[0]
+
+
+__all__.append("create_session_evaluation")

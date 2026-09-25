@@ -7,6 +7,7 @@ from services.supabase_client import (
     create_user_record,
     fetch_user_record,
     fetch_users_by_role,
+    log_access_event,
 )
 from tests._helpers import TEST_PASSWORD, tag
 
@@ -123,6 +124,33 @@ def test_create_user_com_matricula_login_por_email_e_matricula(
         .execute()
     )
     assert raw.data["matricula"] == matricula
+
+
+def test_log_access_event(cfg, sb_client, make_login_user):
+    username, email, rec = make_login_user(role="student")
+
+    log_access_event(
+        cfg.SUPABASE_URL,
+        cfg.SUPABASE_SERVICE_ROLE_KEY,
+        cfg.SUPABASE_ACCESS_LOGS_TABLE,
+        user_id=rec.id,
+        role="aluno",
+    )
+
+    rows = (
+        sb_client.table(cfg.SUPABASE_ACCESS_LOGS_TABLE)
+        .select("*")
+        .eq("user_id", rec.id)
+        .execute()
+        .data
+    )
+    assert len(rows) == 1
+    assert rows[0]["event"] == "login"
+    assert rows[0]["role"] == "aluno"
+
+    sb_client.table(cfg.SUPABASE_ACCESS_LOGS_TABLE).delete().eq(
+        "id", rows[0]["id"]
+    ).execute()
 
 
 def test_fetch_user_record_inexistente(cfg):
