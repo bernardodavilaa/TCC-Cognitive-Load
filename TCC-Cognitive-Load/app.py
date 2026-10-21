@@ -430,7 +430,12 @@ def build_app() -> gr.Blocks:
             ],
         )
 
-        demo.queue()
+        # Gradio 5 usa default_concurrency_limit=1 quando omitido -- trava
+        # eventos de UI (ex.: alternar Login/Registrar) atrás uns dos outros
+        # quando vários alunos acessam ao mesmo tempo. As funções aqui são
+        # IO-bound (Supabase/Vertex), não CPU-bound, então um limite maior é
+        # seguro mesmo no tier gratuito (cpu-basic) do HF Space.
+        demo.queue(default_concurrency_limit=20)
 
     return demo
 
