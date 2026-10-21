@@ -454,6 +454,7 @@ def student_setup_from_class(selected_id, classrooms, subjects_by_class, current
             gr.update(value=""),
             gr.update(value="não"),
             gr.update(value=1),
+            gr.update(value=""),
         )
 
     assunto = c.get("theme_name") or c.get("name") or ""
@@ -474,6 +475,7 @@ def student_setup_from_class(selected_id, classrooms, subjects_by_class, current
     estilo = script.get("estilo", "simples")
     detalhamento = script.get("detalhamento", "detalhadas")
     interesses = ""
+    interesses_detalhe = ""
     curso_periodo = ""
     contato_previo = "não"
     autoavaliacao = 1
@@ -490,6 +492,7 @@ def student_setup_from_class(selected_id, classrooms, subjects_by_class, current
             estilo = profile.get("estilo_preferido") or estilo
             detalhamento = profile.get("detalhamento_preferido") or detalhamento
             interesses = profile.get("interesses") or interesses
+            interesses_detalhe = profile.get("interesses_detalhe") or interesses_detalhe
             curso_periodo = profile.get("curso_periodo") or curso_periodo
             contato_previo = profile.get("contato_previo") or contato_previo
             autoavaliacao = profile.get("autoavaliacao") or autoavaliacao
@@ -508,6 +511,7 @@ def student_setup_from_class(selected_id, classrooms, subjects_by_class, current
         gr.update(value=curso_periodo),
         gr.update(value=contato_previo),
         gr.update(value=autoavaliacao),
+        gr.update(value=interesses_detalhe),
     )
 
 
@@ -962,7 +966,24 @@ def student_apply_setup(
     auth_state=None,
     curso_periodo=None,
     study_participant=None,
+    interesses_detalhe=None,
 ):
+    # 6.1 é obrigatório só quando o aluno preencheu "temas de interesse" --
+    # sem isso o PAGE só tem um rótulo genérico pra ancorar a resposta.
+    if (interesses or "").strip() and not (interesses_detalhe or "").strip():
+        gr.Warning(
+            "Conte um pouco mais sobre o tema de interesse que você colocou "
+            "(campo 6.1) antes de continuar."
+        )
+        return (
+            script_state,
+            gr.update(visible=True),
+            gr.update(visible=False),
+            {},
+            {},
+            gr.update(visible=False),
+        )
+
     extras = _build_extras_from_classroom(theme, subthemes, interesses)
     new_script = buildCustomScript(
         theme,
@@ -985,7 +1006,8 @@ def student_apply_setup(
     page_context = {
         "enabled": page_enabled,
         "profile": build_interim_profile(
-            estilo, detalhamento, interesses, prior_experience, self_rating
+            estilo, detalhamento, interesses, prior_experience, self_rating,
+            interesses_detalhe=interesses_detalhe,
         ),
         "subject": theme,
     }
@@ -1003,6 +1025,7 @@ def student_apply_setup(
                 curso_periodo=(curso_periodo or "").strip() or None,
                 contato_previo=(prior_experience or "").strip() or None,
                 interesses=(interesses or "").strip() or None,
+                interesses_detalhe=(interesses_detalhe or "").strip() or None,
                 estilo_preferido=(estilo or "").strip() or None,
                 detalhamento_preferido=(detalhamento or "").strip() or None,
                 autoavaliacao=int(self_rating) if self_rating not in (None, "") else None,
@@ -1924,6 +1947,13 @@ def build_student_views(
                     label="6) Temas de interesse",
                     placeholder="Ex: futebol, games, música",
                 )
+                stInteressesDetalhe = gr.Textbox(
+                    label="6.1) Conte um pouco mais sobre um desses temas (obrigatório se "
+                    "preencheu o campo acima)",
+                    placeholder="Ex: Sou torcedor do Atlético desde criança, jogo bola toda "
+                    "semana com os amigos e gosto de acompanhar as táticas dos times...",
+                    lines=2,
+                )
                 stPriorExperience = gr.Radio(
                     choices=["sim", "não", "um pouco"],
                     value="não",
@@ -2116,6 +2146,7 @@ def build_student_views(
             stCursoPeriodo,
             stPriorExperience,
             stSelfRating,
+            stInteressesDetalhe,
         ],
     )
 
@@ -2153,6 +2184,7 @@ def build_student_views(
             auth_state,
             stCursoPeriodo,
             study_participant_state,
+            stInteressesDetalhe,
         ],
         outputs=[script_state, stCfgCol, stChatCol, page_profile_state, study_session_state, stExerciseToggle],
     )

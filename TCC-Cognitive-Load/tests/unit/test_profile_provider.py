@@ -42,3 +42,16 @@ def test_campos_none_viram_string_vazia():
     assert profile["detail_level"] == ""
     assert profile["hobbies"] == ""
     assert profile["prior_experience"] == ""
+
+
+def test_hobbies_detail_ausente_nao_aparece_no_dict():
+    profile = build_interim_profile("simples", "curtas", "futebol", "sim", 3)
+    assert "hobbies_detail" not in profile
+
+
+def test_hobbies_detail_presente_e_normalizado():
+    profile = build_interim_profile(
+        "simples", "curtas", "futebol", "sim", 3,
+        interesses_detalhe="  jogo bola toda semana  ",
+    )
+    assert profile["hobbies_detail"] == "jogo bola toda semana"

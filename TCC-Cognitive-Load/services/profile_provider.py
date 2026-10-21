@@ -22,6 +22,8 @@ def build_interim_profile(
     interesses: Optional[str],
     prior_experience: Optional[str],
     self_rating,
+    *,
+    interesses_detalhe: Optional[str] = None,
 ) -> dict:
     """Normaliza os campos do formulário de sala num dict de perfil.
 
@@ -40,10 +42,14 @@ def build_interim_profile(
     if rating is not None:
         rating = max(1, min(5, rating))
 
-    return {
+    profile = {
         "learning_style": (estilo or "").strip(),
         "detail_level": (detalhamento or "").strip(),
         "hobbies": (interesses or "").strip(),
         "prior_experience": (prior_experience or "").strip(),
         "self_rating": rating,
     }
+    detalhe = (interesses_detalhe or "").strip()
+    if detalhe:
+        profile["hobbies_detail"] = detalhe
+    return profile

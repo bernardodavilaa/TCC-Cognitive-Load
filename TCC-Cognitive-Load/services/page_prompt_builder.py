@@ -85,6 +85,7 @@ def build_page_messages(base_response: str, profile: Optional[dict], *, subject:
 
     profile = profile or {}
     hobbies = (profile.get("hobbies") or "").strip()
+    hobbies_detail = (profile.get("hobbies_detail") or "").strip()
     learning_style = profile.get("learning_style")
     detail_level = profile.get("detail_level")
     prior_experience = profile.get("prior_experience")
@@ -94,11 +95,16 @@ def build_page_messages(base_response: str, profile: Optional[dict], *, subject:
     zpd_support = _describe_zpd_support(self_rating)
     udl_format = _describe_udl_format(learning_style, detail_level)
 
-    hobbies_line = (
-        f"Interesses/hobbies declarados pelo aluno: {hobbies}."
-        if hobbies
-        else "O aluno não declarou interesses específicos; use exemplos genéricos do cotidiano."
-    )
+    if hobbies and hobbies_detail:
+        hobbies_line = (
+            f"Interesses/hobbies declarados pelo aluno: {hobbies}. "
+            f"O próprio aluno descreveu sua experiência assim: \"{hobbies_detail}\". "
+            "Use esses detalhes concretos para construir a analogia, não só o rótulo do tema."
+        )
+    elif hobbies:
+        hobbies_line = f"Interesses/hobbies declarados pelo aluno: {hobbies}."
+    else:
+        hobbies_line = "O aluno não declarou interesses específicos; use exemplos genéricos do cotidiano."
 
     system_content = (
         "Você é o Módulo PAGE de Reformatação Contextual, uma segunda camada que "
