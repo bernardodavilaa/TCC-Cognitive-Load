@@ -74,6 +74,28 @@ def test_upsert_atualiza_sem_duplicar(cfg, sb_client, profile_student):
     assert rows[0]["autoavaliacao"] == 4
 
 
+def test_upsert_e_fetch_interesses_estruturado(cfg, profile_student):
+    student_id = profile_student
+    estruturado = [
+        {"tema": "Esportes", "detalhe": "jogo vôlei nos fins de semana"},
+        {"tema": "Música", "detalhe": ""},
+    ]
+
+    upsert_student_profile(
+        cfg.SUPABASE_URL,
+        cfg.SUPABASE_SERVICE_ROLE_KEY,
+        cfg.SUPABASE_PROFILE_TABLE,
+        student_id,
+        interesses="Esportes (jogo vôlei nos fins de semana); Música",
+        interesses_estruturado=estruturado,
+    )
+
+    profile = fetch_student_profile(
+        cfg.SUPABASE_URL, cfg.SUPABASE_SERVICE_ROLE_KEY, cfg.SUPABASE_PROFILE_TABLE, student_id
+    )
+    assert profile["interesses_estruturado"] == estruturado
+
+
 def test_fetch_perfil_inexistente(cfg):
     assert (
         fetch_student_profile(

@@ -242,6 +242,9 @@ def build_app() -> gr.Blocks:
 
         # Authentication flows ---------------------------------------------
         auth_views.btn_login.click(
+            lambda: gr.update(interactive=False, value="Entrando..."),
+            outputs=auth_views.btn_login,
+        ).then(
             doLogin,
             inputs=[auth_views.username, auth_views.password, auth_state],
             outputs=[auth_views.login_msg, auth_state],
@@ -299,6 +302,9 @@ def build_app() -> gr.Blocks:
         ).then(
             student_set_exit_label,
             outputs=[student_views.rooms_back_button],
+        ).then(
+            lambda: gr.update(interactive=True, value="Entrar"),
+            outputs=auth_views.btn_login,
         )
 
         auth_views.btn_register.click(

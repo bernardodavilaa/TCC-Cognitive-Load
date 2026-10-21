@@ -8,6 +8,9 @@ service_account.json
 *-service-account*.json
 tcc-cognitive-load-*.json
 
+# Seeds com dados reais de alunos (PII + hash de senha) -- nunca versionar
+DB/seeds/
+
 *.pyc
 
 *.vscode

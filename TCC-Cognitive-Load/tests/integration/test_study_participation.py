@@ -29,10 +29,11 @@ DEFAULT_CONFIG = {
     "meta_exercicios": 4,
     "min_analise_sessoes": 1,
     "questionario_min_sessoes": 2,
-    "peso_sessoes": 0.30,
-    "peso_duvidas": 0.20,
-    "peso_exercicios": 0.30,
+    "peso_sessoes": 0.25,
+    "peso_duvidas": 0.15,
+    "peso_exercicios": 0.25,
     "peso_questionario": 0.20,
+    "peso_interesses": 0.15,
 }
 
 
@@ -194,8 +195,9 @@ def test_progress_bar_math_matches_acceptance_criterion_10(cfg, entities, alloca
     assert stats["duvidas_validas"] == 3
     assert stats["exercicios_concluidos"] == 0  # não cobertas neste teste
     assert stats["questionario_enviado"] is False
-    # 30%*(3/3) + 20%*(3/6) + 30%*(0/4) + 20%*0 = 30 + 10 + 0 + 0 = 40
-    assert stats["progresso_pct"] == 40.0
+    assert stats["preencheu_interesses"] is False  # nenhum config_applied logado
+    # 25%*(3/3) + 15%*(3/6) + 25%*(0/4) + 20%*0 + 15%*0 = 25 + 7.5 + 0 + 0 + 0 = 32.5
+    assert stats["progresso_pct"] == 32.5
 
     rows = (
         entities.sb.table(cfg.SUPABASE_EVALUATIONS_TABLE)
@@ -211,8 +213,8 @@ def test_progress_bar_math_matches_acceptance_criterion_10(cfg, entities, alloca
 def test_progress_bar_with_meta_exercicios_zero_does_not_divide_by_zero(cfg, entities, allocated_participant):
     """Plano B (mitigação do modo exercício): meta_exercicios=0 não pode
     quebrar a barra, e o peso dos exercícios deve ser redistribuído
-    proporcionalmente entre sessões/dúvidas/questionário (30/20/30/20 vira
-    ~43/29/0/29, conforme a revisão pediu)."""
+    proporcionalmente entre os demais itens ativos (sessões/dúvidas/
+    questionário/interesses: 25/15/25/20/15 vira ~33.3/20/0/26.7/20)."""
     classroom_id, participant = allocated_participant
     config_zero_ex = dict(DEFAULT_CONFIG, meta_exercicios=0)
 
@@ -239,9 +241,10 @@ def test_progress_bar_with_meta_exercicios_zero_does_not_divide_by_zero(cfg, ent
     # não deve levantar ZeroDivisionError
     stats = compute_participation(cfg.SUPABASE_URL, cfg.SUPABASE_SERVICE_ROLE_KEY, participant["id"], config_zero_ex)
     assert stats["exercicios_concluidos"] == 0
-    # sessões 3/3=100% (peso efetivo ~43), dúvidas 3/6=50% (peso efetivo ~29),
-    # questionário 0% (peso efetivo ~29) -> 43*1.0 + 29*0.5 + 29*0 = 57.5
-    assert stats["progresso_pct"] == pytest.approx(57.5, abs=0.5)
+    # sessões 3/3=100% (peso efetivo ~33.3), dúvidas 3/6=50% (peso efetivo ~20),
+    # questionário 0% e interesses 0% (sem contribuição) ->
+    # 33.3*1.0 + 20*0.5 = 43.3
+    assert stats["progresso_pct"] == pytest.approx(43.3, abs=0.5)
     # meta 0 -> exercícios não bloqueiam "Completo" (0 >= 0)
     # (sessões/dúvidas/questionário ainda faltam aqui, então não fica completo,
     # mas o importante é não quebrar e não exigir exercícios)
@@ -252,6 +255,43 @@ def test_progress_bar_with_meta_exercicios_zero_does_not_divide_by_zero(cfg, ent
     )
     for row in rows:
         entities.sb.table(cfg.SUPABASE_EVALUATIONS_TABLE).delete().eq("id", row["id"]).execute()
+
+
+def test_preencheu_interesses_via_config_applied_event(cfg, entities, allocated_participant):
+    """Dose de personalização: um evento 'config_applied' com
+    n_temas_interesse >= 1 conta como item satisfeito na barra, mesmo sem
+    nenhuma sessão/dúvida/exercício/questionário."""
+    classroom_id, participant = allocated_participant
+
+    log_study_event(
+        cfg.SUPABASE_URL,
+        cfg.SUPABASE_SERVICE_ROLE_KEY,
+        participant_id=participant["id"],
+        classroom_id=classroom_id,
+        effective_group=participant["group_name"],
+        event_type="config_applied",
+        meta={"seconds_to_apply": 12.3, "n_temas_interesse": 2},
+    )
+    stats = compute_participation(cfg.SUPABASE_URL, cfg.SUPABASE_SERVICE_ROLE_KEY, participant["id"], DEFAULT_CONFIG)
+    assert stats["preencheu_interesses"] is True
+    # só o item interesses satisfeito: 15% * 1.0 = 15
+    assert stats["progresso_pct"] == 15.0
+
+
+def test_preencheu_interesses_falso_quando_zero_temas(cfg, entities, allocated_participant):
+    classroom_id, participant = allocated_participant
+
+    log_study_event(
+        cfg.SUPABASE_URL,
+        cfg.SUPABASE_SERVICE_ROLE_KEY,
+        participant_id=participant["id"],
+        classroom_id=classroom_id,
+        effective_group=participant["group_name"],
+        event_type="config_applied",
+        meta={"seconds_to_apply": 8.0, "n_temas_interesse": 0},
+    )
+    stats = compute_participation(cfg.SUPABASE_URL, cfg.SUPABASE_SERVICE_ROLE_KEY, participant["id"], DEFAULT_CONFIG)
+    assert stats["preencheu_interesses"] is False
 
 
 def test_duplicate_message_text_counts_once(cfg, entities, allocated_participant):

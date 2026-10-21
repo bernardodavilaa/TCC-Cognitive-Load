@@ -144,6 +144,12 @@ def bot(history, docsState, scriptState, advState, currentChatId, chatsState, pa
                 yield history
             final_text = history[-1]["content"]
         else:
+            # A chamada base é consumida de uma vez (sem yield por delta) pra
+            # poder ser reformatada inteira pelo PAGE antes de chegar à UI --
+            # sem isso o aluno fica olhando pra um balão vazio, sem nenhum
+            # sinal de que algo está acontecendo, até a 2ª chamada começar.
+            history[-1]["content"] = "⏳ Pensando numa explicação pra você..."
+            yield history
             t0 = time.monotonic()
             base_text = "".join(_streamFromVertex(messages, VERTEX_CFG, adv))
             page_meta["t_base_s"] = round(time.monotonic() - t0, 2)

@@ -12,6 +12,14 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 import gradio as gr
 
 from services.docs import createChatPdf
+from services.interest_chips import (
+    INTEREST_PLACEHOLDERS,
+    INTEREST_THEMES,
+    MAX_THEMES as MAX_INTEREST_THEMES,
+    deserialize_structured as deserialize_interest_structured,
+    serialize_interests,
+    validate_selection as validate_interest_selection,
+)
 from services.profile_provider import build_interim_profile
 from services.script_builder import buildCustomScript
 from services.supabase_client import (
@@ -99,7 +107,7 @@ class StudentViews:
     estilo: gr.Radio
     detalhamento: gr.Radio
     objetivo: gr.Textbox
-    interesses: gr.Textbox
+    interesses: gr.State
     submit_button: gr.Button
     provider_markdown: gr.Markdown
     chatbot: gr.Chatbot
@@ -394,6 +402,8 @@ def _render_study_progress_md(cls_id, auth_state):
         f"- {done_icon(stats['exercicios_concluidos'] >= meta_exercicios)} Exercícios concluídos: "
         f"{stats['exercicios_concluidos']}/{meta_exercicios}\n"
         f"- {done_icon(stats['questionario_enviado'])} Questionário final: {quest_txt}\n"
+        f"- {done_icon(stats['preencheu_interesses'])} Temas de interesse: "
+        f"{'preenchidos' if stats['preencheu_interesses'] else 'pendente'}\n"
         f"\n_Uma sessão conta quando você conversa por tempo suficiente e "
         f"responde à avaliação ao final. A participação completa vale "
         f"pontos extras na disciplina._\n"
@@ -440,13 +450,14 @@ def _student_subtheme_choices(cls_id: Optional[str], subjects_by_class: Dict[str
 def student_setup_from_class(selected_id, classrooms, subjects_by_class, current_adv, auth_state=None):
     c = _get_class_by_id(classrooms, selected_id)
     if not c:
+        empty_detail_updates = [gr.update(visible=False) for _ in INTEREST_THEMES]
         return (
             gr.update(value=""),
             gr.update(choices=[], value=[]),
             gr.update(value="simples"),
             gr.update(value="detalhadas"),
             gr.update(value=""),
-            gr.update(value=""),
+            gr.update(value=[]),
             gr.update(visible=True),
             gr.update(visible=False),
             current_adv or {},
@@ -454,7 +465,8 @@ def student_setup_from_class(selected_id, classrooms, subjects_by_class, current
             gr.update(value=""),
             gr.update(value="não"),
             gr.update(value=1),
-            gr.update(value=""),
+            [],
+            *empty_detail_updates,
         )
 
     assunto = c.get("theme_name") or c.get("name") or ""
@@ -474,8 +486,7 @@ def student_setup_from_class(selected_id, classrooms, subjects_by_class, current
     # quando existir, tem prioridade sobre estilo/detalhamento/interesses.
     estilo = script.get("estilo", "simples")
     detalhamento = script.get("detalhamento", "detalhadas")
-    interesses = ""
-    interesses_detalhe = ""
+    interesses_estruturado = []
     curso_periodo = ""
     contato_previo = "não"
     autoavaliacao = 1
@@ -491,19 +502,21 @@ def student_setup_from_class(selected_id, classrooms, subjects_by_class, current
         if profile:
             estilo = profile.get("estilo_preferido") or estilo
             detalhamento = profile.get("detalhamento_preferido") or detalhamento
-            interesses = profile.get("interesses") or interesses
-            interesses_detalhe = profile.get("interesses_detalhe") or interesses_detalhe
+            interesses_estruturado = profile.get("interesses_estruturado") or interesses_estruturado
             curso_periodo = profile.get("curso_periodo") or curso_periodo
             contato_previo = profile.get("contato_previo") or contato_previo
             autoavaliacao = profile.get("autoavaliacao") or autoavaliacao
 
+    chip_update, prev_valid, detail_updates = _interest_field_updates_from_structured(
+        interesses_estruturado
+    )
     return (
         gr.update(value=assunto),
         gr.update(choices=st_choices, value=[]),
         gr.update(value=estilo),
         gr.update(value=detalhamento),
         gr.update(value=""),
-        gr.update(value=interesses),
+        chip_update,
         gr.update(visible=True),
         gr.update(visible=False),
         new_adv,
@@ -511,7 +524,8 @@ def student_setup_from_class(selected_id, classrooms, subjects_by_class, current
         gr.update(value=curso_periodo),
         gr.update(value=contato_previo),
         gr.update(value=autoavaliacao),
-        gr.update(value=interesses_detalhe),
+        prev_valid,
+        *detail_updates,
     )
 
 
@@ -753,6 +767,33 @@ def _reveal_setup_updates(c, cid, subjects_by_class):
     return gr.update(value=theme), gr.update(choices=subs, value=subs)
 
 
+def student_toggle_interest_chip(selected, prev_valid):
+    """Trava a seleção de chips em `MAX_INTEREST_THEMES` temas (reverte pro
+    último valor válido com um aviso) e mostra só os campos de detalhe dos
+    temas atualmente selecionados."""
+    selected = list(selected or [])
+    if len(selected) > MAX_INTEREST_THEMES:
+        gr.Warning(f"Máximo de {MAX_INTEREST_THEMES} temas.")
+        selected = list(prev_valid or [])
+    visibility_updates = [
+        gr.update(visible=(theme in selected)) for theme in INTEREST_THEMES
+    ]
+    return (gr.update(value=selected), selected, *visibility_updates)
+
+
+def _interest_field_updates_from_structured(structured):
+    """Monta os updates de chips + campos de detalhe a partir do JSON
+    persistido em `interesses_estruturado` -- usado pra pré-preencher o
+    formulário quando o aluno já tem perfil salvo."""
+    selected, details = deserialize_interest_structured(structured)
+    chip_update = gr.update(value=selected)
+    detail_updates = [
+        gr.update(visible=(theme in selected), value=details.get(theme, ""))
+        for theme in INTEREST_THEMES
+    ]
+    return chip_update, selected, detail_updates
+
+
 def student_go_setup(auth, cid, classrooms, subjects_by_class):
     """Roteia pra configuração da sala — ou, se a sala é do Modo Estudo
     (RF-A0.1) e o aluno ainda não tem alocação, pra etapa inicial primeiro.
@@ -770,6 +811,7 @@ def student_go_setup(auth, cid, classrooms, subjects_by_class):
             gr.update(value=""),
             gr.update(choices=[]),
             {},
+            gr.update(),
             gr.update(),
             gr.update(),
         )
@@ -791,6 +833,7 @@ def student_go_setup(auth, cid, classrooms, subjects_by_class):
                 gr.update(),
                 gr.update(),
                 {},
+                gr.update(),
                 gr.update(),
                 gr.update(),
             )
@@ -825,6 +868,7 @@ def student_go_setup(auth, cid, classrooms, subjects_by_class):
                 participant,
                 chat_context,
                 gr.update(visible=True),
+                gr.update(),
             )
 
         theme_update, subs_update = _reveal_setup_updates(c, cid, subjects_by_class)
@@ -837,6 +881,7 @@ def student_go_setup(auth, cid, classrooms, subjects_by_class):
             participant,
             gr.update(),
             gr.update(visible=False),
+            time.time(),
         )
 
     theme_update, subs_update = _reveal_setup_updates(c, cid, subjects_by_class)
@@ -849,6 +894,7 @@ def student_go_setup(auth, cid, classrooms, subjects_by_class):
         {},
         gr.update(),
         gr.update(visible=False),
+        time.time(),
     )
 
 
@@ -857,7 +903,7 @@ def student_submit_study_intro(auth, cid, classrooms, subjects_by_class, e1, e2,
     config/blocos do estudo sob demanda na primeira vez) e libera o chat."""
     c = _get_class_by_id(classrooms, cid)
     if not c:
-        return gr.update(), gr.update(), gr.update(), gr.update(), {}, "Warning: Sala não encontrada.", gr.update(), gr.update()
+        return gr.update(), gr.update(), gr.update(), gr.update(), {}, "Warning: Sala não encontrada.", gr.update(), gr.update(), gr.update()
     if not e1 or not e2 or not e3:
         return (
             gr.update(visible=True),
@@ -868,11 +914,12 @@ def student_submit_study_intro(auth, cid, classrooms, subjects_by_class, e1, e2,
             "Warning: Responda as três perguntas pra continuar.",
             gr.update(),
             gr.update(),
+            gr.update(),
         )
 
     student_id = _auth_user_id(auth)
     if not student_id:
-        return gr.update(), gr.update(), gr.update(), gr.update(), {}, "Warning: Faça login.", gr.update(), gr.update()
+        return gr.update(), gr.update(), gr.update(), gr.update(), {}, "Warning: Faça login.", gr.update(), gr.update(), gr.update()
 
     try:
         config = fetch_latest_study_config(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, cid)
@@ -906,6 +953,7 @@ def student_submit_study_intro(auth, cid, classrooms, subjects_by_class, e1, e2,
             "Warning: Configure SUPABASE_URL e SUPABASE_SERVICE_ROLE_KEY.",
             gr.update(),
             gr.update(),
+            gr.update(),
         )
     except SupabaseOperationError as err:
         return (
@@ -915,6 +963,7 @@ def student_submit_study_intro(auth, cid, classrooms, subjects_by_class, e1, e2,
             gr.update(),
             {},
             f"Warning: Não foi possível iniciar agora, tente novamente. ({err})",
+            gr.update(),
             gr.update(),
             gr.update(),
         )
@@ -935,6 +984,7 @@ def student_submit_study_intro(auth, cid, classrooms, subjects_by_class, e1, e2,
         "",
         prior_update,
         self_rating_update,
+        time.time(),
     )
 
 
@@ -957,7 +1007,19 @@ def student_apply_setup(
     estilo,
     detalhamento,
     objetivo,
-    interesses,
+    interesse_chips,
+    interesse_detalhe_esportes,
+    interesse_detalhe_musica,
+    interesse_detalhe_jogos,
+    interesse_detalhe_series_filmes,
+    interesse_detalhe_culinaria,
+    interesse_detalhe_leitura,
+    interesse_detalhe_arte_desenho,
+    interesse_detalhe_viagens,
+    interesse_detalhe_academia_treino,
+    interesse_detalhe_tecnologia,
+    interesse_detalhe_animais,
+    interesse_detalhe_outro,
     subthemes,
     script_state,
     classrooms=None,
@@ -966,15 +1028,25 @@ def student_apply_setup(
     auth_state=None,
     curso_periodo=None,
     study_participant=None,
-    interesses_detalhe=None,
+    config_open_ts=None,
 ):
-    # 6.1 é obrigatório só quando o aluno preencheu "temas de interesse" --
-    # sem isso o PAGE só tem um rótulo genérico pra ancorar a resposta.
-    if (interesses or "").strip() and not (interesses_detalhe or "").strip():
-        gr.Warning(
-            "Conte um pouco mais sobre o tema de interesse que você colocou "
-            "(campo 6.1) antes de continuar."
-        )
+    details_by_theme = {
+        "Esportes": interesse_detalhe_esportes,
+        "Música": interesse_detalhe_musica,
+        "Jogos": interesse_detalhe_jogos,
+        "Séries e filmes": interesse_detalhe_series_filmes,
+        "Culinária": interesse_detalhe_culinaria,
+        "Leitura": interesse_detalhe_leitura,
+        "Arte e desenho": interesse_detalhe_arte_desenho,
+        "Viagens": interesse_detalhe_viagens,
+        "Academia e treino": interesse_detalhe_academia_treino,
+        "Tecnologia": interesse_detalhe_tecnologia,
+        "Animais": interesse_detalhe_animais,
+        "Outro": interesse_detalhe_outro,
+    }
+    error = validate_interest_selection(interesse_chips, details_by_theme)
+    if error:
+        gr.Warning(error)
         return (
             script_state,
             gr.update(visible=True),
@@ -982,7 +1054,17 @@ def student_apply_setup(
             {},
             {},
             gr.update(visible=False),
+            gr.update(),
+            gr.update(),
         )
+
+    interesses, interesses_estruturado = serialize_interests(interesse_chips, details_by_theme)
+    # Pro PAGE, concatena os detalhes por tema num texto só -- mesmo formato
+    # que `build_interim_profile`/`page_prompt_builder` já esperavam de
+    # `interesses_detalhe` (campo livre, agora superado pelos chips).
+    interesses_detalhe = "; ".join(
+        d.strip() for d in details_by_theme.values() if (d or "").strip()
+    )
 
     extras = _build_extras_from_classroom(theme, subthemes, interesses)
     new_script = buildCustomScript(
@@ -1025,7 +1107,7 @@ def student_apply_setup(
                 curso_periodo=(curso_periodo or "").strip() or None,
                 contato_previo=(prior_experience or "").strip() or None,
                 interesses=(interesses or "").strip() or None,
-                interesses_detalhe=(interesses_detalhe or "").strip() or None,
+                interesses_estruturado=interesses_estruturado or None,
                 estilo_preferido=(estilo or "").strip() or None,
                 detalhamento_preferido=(detalhamento or "").strip() or None,
                 autoavaliacao=int(self_rating) if self_rating not in (None, "") else None,
@@ -1070,6 +1152,27 @@ def student_apply_setup(
             config = fetch_latest_study_config(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, cid) or {}
             if int(config.get("meta_exercicios", 1)) > 0:
                 exercise_btn_update = gr.update(visible=True)
+            # Mede o esforço de preencher a configuração da sala: tempo entre
+            # a tela aparecer (student_go_setup/student_submit_study_intro) e
+            # o aluno clicar em "Aplicar Configuração da Sala".
+            if config_open_ts:
+                try:
+                    elapsed = max(0.0, time.time() - float(config_open_ts))
+                    log_study_event(
+                        SUPABASE_URL,
+                        SUPABASE_SERVICE_ROLE_KEY,
+                        participant_id=study_participant["id"],
+                        classroom_id=cid,
+                        effective_group=effective_group,
+                        event_type="config_applied",
+                        meta={
+                            "seconds_to_apply": round(elapsed, 1),
+                            "interesses_form_version": "chips_v1",
+                            "n_temas_interesse": len(interesses_estruturado),
+                        },
+                    )
+                except Exception as exc:
+                    print(f"[STUDY] Falha ao logar tempo de configuração: {exc}")
         except Exception as exc:  # pragma: no cover - não deve bloquear o chat
             print(f"[STUDY] Falha ao iniciar sessão do estudo: {exc}")
             study_session = {}
@@ -1081,6 +1184,8 @@ def student_apply_setup(
         page_context,
         study_session,
         exercise_btn_update,
+        interesses,
+        interesses_estruturado,
     )
 
 
@@ -1795,6 +1900,9 @@ def build_student_views(
     study_participant_state = gr.State({})
     study_session_state = gr.State({})
     study_exercise_state = gr.State({})
+    interesse_text_state = gr.State("")
+    interesse_estruturado_state = gr.State([])
+    config_open_ts_state = gr.State(None)
 
     with gr.Column(visible=False) as viewStudentRooms:
         gr.Markdown("## 🎒 Minhas Salas")
@@ -1943,17 +2051,25 @@ def build_student_views(
                     label="5) Objetivo",
                     placeholder="Ex: Revisar para prova de estruturas de dados",
                 )
-                stInteresses = gr.Textbox(
-                    label="6) Temas de interesse",
-                    placeholder="Ex: futebol, games, música",
+                stInteresseChips = gr.CheckboxGroup(
+                    choices=INTEREST_THEMES,
+                    value=[],
+                    label=f"6) Temas de interesse (escolha até {MAX_INTEREST_THEMES})",
                 )
-                stInteressesDetalhe = gr.Textbox(
-                    label="6.1) Conte um pouco mais sobre um desses temas (obrigatório se "
-                    "preencheu o campo acima)",
-                    placeholder="Ex: Sou torcedor do Atlético desde criança, jogo bola toda "
-                    "semana com os amigos e gosto de acompanhar as táticas dos times...",
-                    lines=2,
-                )
+                stInteresseChipsPrev = gr.State([])
+                stInteresseDetalhes: Dict[str, gr.Textbox] = {}
+                for _interest_theme in INTEREST_THEMES:
+                    _label = (
+                        'Descreva o interesse em "Outro" (obrigatório)'
+                        if _interest_theme == "Outro"
+                        else f'Sobre "{_interest_theme}" (opcional)'
+                    )
+                    stInteresseDetalhes[_interest_theme] = gr.Textbox(
+                        label=_label,
+                        placeholder=INTEREST_PLACEHOLDERS[_interest_theme],
+                        visible=False,
+                        lines=1,
+                    )
                 stPriorExperience = gr.Radio(
                     choices=["sim", "não", "um pouco"],
                     value="não",
@@ -2129,7 +2245,16 @@ def build_student_views(
         outputs=[stDocsDownload, stDocsNotice],
     )
 
+    stInteresseChips.change(
+        student_toggle_interest_chip,
+        inputs=[stInteresseChips, stInteresseChipsPrev],
+        outputs=[stInteresseChips, stInteresseChipsPrev, *stInteresseDetalhes.values()],
+    )
+
     setup_evt = stEnterRoomChatSetup.click(
+        lambda: gr.update(interactive=False, value="Entrando..."),
+        outputs=stEnterRoomChatSetup,
+    ).then(
         student_setup_from_class,
         inputs=[stRoomSelect, classrooms_state, subjects_state, adv_state, auth_state],
         outputs=[
@@ -2138,7 +2263,7 @@ def build_student_views(
             stEstilo,
             stDetalhamento,
             stObjetivo,
-            stInteresses,
+            stInteresseChips,
             stCfgCol,
             stChatCol,
             adv_state,
@@ -2146,7 +2271,8 @@ def build_student_views(
             stCursoPeriodo,
             stPriorExperience,
             stSelfRating,
-            stInteressesDetalhe,
+            stInteresseChipsPrev,
+            *stInteresseDetalhes.values(),
         ],
     )
 
@@ -2156,7 +2282,10 @@ def build_student_views(
                 classrooms_state, subjects_state],
         outputs=[viewStudentRooms, viewStudyIntro, viewStudentSetup, stAssunto,
                  stSubthemes, study_participant_state, last_chat_context_state,
-                 viewStudentEvaluation],
+                 viewStudentEvaluation, config_open_ts_state],
+    ).then(
+        lambda: gr.update(interactive=True, value="💬 Entrar no chat da sala"),
+        outputs=stEnterRoomChatSetup,
     )
 
     btnStudySubmitIntro.click(
@@ -2164,10 +2293,14 @@ def build_student_views(
         inputs=[auth_state, student_selected_class, classrooms_state,
                 subjects_state, siE1, siE2, siE3],
         outputs=[viewStudyIntro, viewStudentSetup, stAssunto, stSubthemes,
-                 study_participant_state, studyIntroMsg, stPriorExperience, stSelfRating],
+                 study_participant_state, studyIntroMsg, stPriorExperience,
+                 stSelfRating, config_open_ts_state],
     )
 
     stSubmit.click(
+        lambda: gr.update(interactive=False, value="Aplicando..."),
+        outputs=stSubmit,
+    ).then(
         student_apply_setup,
         inputs=[
             student_selected_class,
@@ -2175,7 +2308,8 @@ def build_student_views(
             stEstilo,
             stDetalhamento,
             stObjetivo,
-            stInteresses,
+            stInteresseChips,
+            *stInteresseDetalhes.values(),
             stSubthemes,
             script_state,
             classrooms_state,
@@ -2184,9 +2318,14 @@ def build_student_views(
             auth_state,
             stCursoPeriodo,
             study_participant_state,
-            stInteressesDetalhe,
+            config_open_ts_state,
         ],
-        outputs=[script_state, stCfgCol, stChatCol, page_profile_state, study_session_state, stExerciseToggle],
+        outputs=[script_state, stCfgCol, stChatCol, page_profile_state,
+                 study_session_state, stExerciseToggle, interesse_text_state,
+                 interesse_estruturado_state],
+    ).then(
+        lambda: gr.update(interactive=True, value="Aplicar Configuração da Sala"),
+        outputs=stSubmit,
     )
 
     stChatInput.submit(
@@ -2241,7 +2380,7 @@ def build_student_views(
             stAssunto,
             stSubthemes,
             stObjetivo,
-            stInteresses,
+            interesse_text_state,
             study_participant_state,
             study_session_state,
         ],
@@ -2442,7 +2581,7 @@ def build_student_views(
         estilo=stEstilo,
         detalhamento=stDetalhamento,
         objetivo=stObjetivo,
-        interesses=stInteresses,
+        interesses=interesse_text_state,
         submit_button=stSubmit,
         provider_markdown=stProvider,
         chatbot=stChatbot,

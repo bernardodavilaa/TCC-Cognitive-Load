@@ -707,6 +707,7 @@ def compute_participation(url: str, key: str, participant_id: str, config: Dict[
 
     seen_texts: set = set()
     duvidas_validas = 0
+    preencheu_interesses = False
     for ev in events_resp.data or []:
         if ev.get("event_type") == "message" and ev.get("message_category") == "teorica":
             text_key = ((ev.get("meta") or {}).get("text_normalized")) or ev.get("created_at")
@@ -714,6 +715,9 @@ def compute_participation(url: str, key: str, participant_id: str, config: Dict[
                 continue
             seen_texts.add(text_key)
             duvidas_validas += 1
+        elif ev.get("event_type") == "config_applied":
+            if int((ev.get("meta") or {}).get("n_temas_interesse", 0) or 0) >= 1:
+                preencheu_interesses = True
 
     exercicios_concluidos = sum(
         1 for e in exercises_resp.data or [] if e.get("status") == "concluido"
@@ -737,10 +741,11 @@ def compute_participation(url: str, key: str, participant_id: str, config: Dict[
     )
     estado = "Completo" if is_completo else ("Analisável" if is_analisavel else "Alocado")
 
-    peso_sessoes = float(config.get("peso_sessoes", 0.30))
-    peso_duvidas = float(config.get("peso_duvidas", 0.20))
-    peso_exercicios = float(config.get("peso_exercicios", 0.30))
+    peso_sessoes = float(config.get("peso_sessoes", 0.25))
+    peso_duvidas = float(config.get("peso_duvidas", 0.15))
+    peso_exercicios = float(config.get("peso_exercicios", 0.25))
     peso_questionario = float(config.get("peso_questionario", 0.20))
+    peso_interesses = float(config.get("peso_interesses", 0.15))
 
     # Metas podem ser 0 (ex.: meta_exercicios=0 como mitigação enquanto o
     # modo exercício está indisponível) -- trata como "item satisfeito" e
@@ -751,6 +756,7 @@ def compute_participation(url: str, key: str, participant_id: str, config: Dict[
         (meta_duvidas, min(duvidas_validas / meta_duvidas, 1.0) if meta_duvidas else 1.0, peso_duvidas),
         (meta_exercicios, min(exercicios_concluidos / meta_exercicios, 1.0) if meta_exercicios else 1.0, peso_exercicios),
         (1, 1.0 if questionario_enviado else 0.0, peso_questionario),
+        (1, 1.0 if preencheu_interesses else 0.0, peso_interesses),
     ]
     peso_ativo_total = sum(peso for meta, _frac, peso in itens if meta)
     peso_zerado_total = sum(peso for meta, _frac, peso in itens if not meta)
@@ -770,6 +776,7 @@ def compute_participation(url: str, key: str, participant_id: str, config: Dict[
         "duvidas_validas": duvidas_validas,
         "exercicios_concluidos": exercicios_concluidos,
         "questionario_enviado": questionario_enviado,
+        "preencheu_interesses": preencheu_interesses,
         "estado": estado,
         "progresso_pct": progresso_pct,
         "questionario_liberado": n_sessoes_validas >= config.get("questionario_min_sessoes", 2),
