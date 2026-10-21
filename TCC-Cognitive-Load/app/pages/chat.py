@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import time
 from dataclasses import dataclass
 
 import gradio as gr
@@ -122,6 +123,20 @@ def bot(history, docsState, scriptState, advState, currentChatId, chatsState, pa
     page_context = page_context if isinstance(page_context, dict) else {}
     page_enabled = bool(page_context.get("enabled"))
 
+    # RF-B7: para cada resposta, registra se o PAGE de fato aplicou
+    # (page_applied), se caiu em fallback, e os tempos das duas chamadas —
+    # sem isso não dá pra provar que a 2ª chamada realmente ocorreu (o bug
+    # do page_enabled que quebrava isso em silêncio só foi achado às cegas).
+    page_meta = {
+        "page_enabled": page_enabled,
+        "page_applied": False,
+        "fallback": False,
+        "t_base_s": None,
+        "t_page_s": None,
+        "t_total_s": None,
+    }
+    t_start = time.monotonic()
+
     try:
         if not page_enabled:
             for delta in _streamFromVertex(messages, VERTEX_CFG, adv):
@@ -129,7 +144,9 @@ def bot(history, docsState, scriptState, advState, currentChatId, chatsState, pa
                 yield history
             final_text = history[-1]["content"]
         else:
+            t0 = time.monotonic()
             base_text = "".join(_streamFromVertex(messages, VERTEX_CFG, adv))
+            page_meta["t_base_s"] = round(time.monotonic() - t0, 2)
             final_text = base_text
             try:
                 page_messages = build_page_messages(
@@ -139,22 +156,29 @@ def bot(history, docsState, scriptState, advState, currentChatId, chatsState, pa
                 )
                 history[-1]["content"] = ""
                 reformatted = ""
+                t1 = time.monotonic()
                 for delta in _streamFromVertex(page_messages, VERTEX_CFG, adv):
                     reformatted += delta
                     history[-1]["content"] = reformatted
                     yield history
+                page_meta["t_page_s"] = round(time.monotonic() - t1, 2)
                 if reformatted.strip():
                     final_text = reformatted
+                    page_meta["page_applied"] = True
                 else:
                     history[-1]["content"] = final_text
+                    page_meta["fallback"] = True
                     yield history
             except Exception:
                 # Módulo PAGE indisponível: cai de volta pra resposta base já
                 # gerada, sem expor erro técnico ao aluno.
                 history[-1]["content"] = final_text
+                page_meta["fallback"] = True
                 yield history
 
+        page_meta["t_total_s"] = round(time.monotonic() - t_start, 2)
         if currentChatId and isinstance(chatsState, dict) and currentChatId in chatsState:
+            chatsState[currentChatId]["last_turn_page_meta"] = page_meta
             chatsState[currentChatId]["messages"].append(
                 {
                     "role": "assistant",

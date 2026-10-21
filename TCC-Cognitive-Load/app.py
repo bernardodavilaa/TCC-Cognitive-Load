@@ -71,6 +71,7 @@ def _logout_cleanup():
         gr.update(visible=False),
         gr.update(visible=False),
         gr.update(visible=False),
+        gr.update(visible=False),
         gr.update(value="Info: Selecione uma sala para visualizar os materiais."),
         gr.update(choices=[], value=None),
         [],
@@ -173,8 +174,8 @@ def build_app() -> gr.Blocks:
             student_go_rooms,
             outputs=[auth_views.view_home, student_views.rooms_view],
         ).then(
-            lambda: gr.update(visible=False),
-            outputs=student_views.setup_view,
+            lambda: (gr.update(visible=False), gr.update(visible=False)),
+            outputs=[student_views.setup_view, student_views.study_intro_view],
         ).then(
             student_rooms_refresh,
             inputs=[auth_state, classrooms_state, subjects_state],
@@ -218,6 +219,7 @@ def build_app() -> gr.Blocks:
                 teacher_view.container,
                 student_views.rooms_view,
                 student_views.setup_view,
+                student_views.study_intro_view,
                 student_views.documents_markdown,
                 student_views.documents_dropdown,
                 student_views.documents_state,
@@ -288,6 +290,7 @@ def build_app() -> gr.Blocks:
                 student_views.documents_download_button,
                 student_views.documents_notice,
                 student_views.history_class_dropdown,
+                student_views.final_quest_button,
             ],
         ).then(
             teacher_history_dropdown,
@@ -355,6 +358,7 @@ def build_app() -> gr.Blocks:
                 student_views.documents_download_button,
                 student_views.documents_notice,
                 student_views.history_class_dropdown,
+                student_views.final_quest_button,
             ],
         ).then(
             teacher_history_dropdown,
@@ -387,6 +391,7 @@ def build_app() -> gr.Blocks:
                 teacher_view.container,
                 student_views.rooms_view,
                 student_views.setup_view,
+                student_views.study_intro_view,
                 student_views.documents_markdown,
                 student_views.documents_dropdown,
                 student_views.documents_state,
@@ -416,6 +421,7 @@ def build_app() -> gr.Blocks:
                 teacher_view.container,
                 student_views.rooms_view,
                 student_views.setup_view,
+                student_views.study_intro_view,
                 student_views.documents_markdown,
                 student_views.documents_dropdown,
                 student_views.documents_state,

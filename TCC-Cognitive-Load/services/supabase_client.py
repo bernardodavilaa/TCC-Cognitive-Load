@@ -9,6 +9,7 @@ from services.supabase.admin import *  # noqa: F401,F403
 from services.supabase.common import *  # noqa: F401,F403
 from services.supabase.storage import *  # noqa: F401,F403
 from services.supabase.student import *  # noqa: F401,F403
+from services.supabase.study import *  # noqa: F401,F403
 from services.supabase.teacher import *  # noqa: F401,F403
 
 __all__ = []  # será preenchido abaixo
@@ -20,6 +21,7 @@ for _module in (
     "services.supabase.teacher",
     "services.supabase.student",
     "services.supabase.storage",
+    "services.supabase.study",
 ):
     module = __import__(_module, fromlist=["__all__"])
     exported = getattr(module, "__all__", None)

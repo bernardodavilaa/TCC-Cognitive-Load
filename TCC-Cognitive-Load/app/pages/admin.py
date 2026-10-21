@@ -1,6 +1,8 @@
 """Admin area utilities and Gradio view builders."""
 
 from __future__ import annotations
+import csv
+import tempfile
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -12,7 +14,11 @@ from services.supabase_client import (
     create_classroom_record,
     create_subject_record,
     delete_classroom_record,
+    fetch_balance_report,
     fetch_classroom_domain,
+    fetch_credit_list,
+    fetch_latest_study_config,
+    fetch_participants_overview,
     list_all_chats,
     remove_classroom_student,
     remove_classroom_teacher,
@@ -403,6 +409,8 @@ def _load_domain_state(current_classrooms=None, current_subjects=None):
                 "theme_name": item.get("theme_name") or item.get("name"),
                 "theme_config": item.get("theme_config") or {},
                 "theme_locked": bool(item.get("theme_locked")),
+                "page_enabled": bool(item.get("page_enabled")),
+                "study_mode": bool(item.get("study_mode")),
                 "is_archived": bool(item.get("is_archived")),
                 "members": {
                     "teachers": sorted({uid for uid in teacher_ids if uid}),
@@ -1046,6 +1054,106 @@ def _go_admin(page):
     )
 
 
+def _researcher_study_classrooms(classrooms):
+    return [
+        (c.get("name") or c["id"], c["id"])
+        for c in (classrooms or [])
+        if c.get("study_mode")
+    ]
+
+
+def researcher_panel_open(auth, classrooms):
+    if not _is_admin(auth):
+        return gr.update(choices=[], value=None), "⛔ Apenas o pesquisador/admin pode acessar este painel."
+    choices = _researcher_study_classrooms(classrooms)
+    default = choices[0][1] if choices else None
+    return gr.update(choices=choices, value=default), ""
+
+
+def _balance_report_md(url, key, cls_id):
+    rows = fetch_balance_report(url, key, cls_id)
+    header = "| Estrato | Controle | Experimental |\n|---|---|---|\n"
+    by_stratum: Dict[str, Dict[str, int]] = {}
+    for row in rows:
+        by_stratum.setdefault(row["stratum"], {})[row["group_name"]] = row["count"]
+    lines = [
+        f"| {stratum} | {counts.get('controle', 0)} | {counts.get('experimental', 0)} |"
+        for stratum, counts in by_stratum.items()
+    ]
+    return header + "\n".join(lines) if lines else "_Nenhum participante alocado ainda._"
+
+
+def _participants_overview_md(overview: List[Dict[str, Any]]) -> str:
+    if not overview:
+        return "_Nenhum participante alocado ainda._"
+    header = (
+        "| Código | Estrato | Estado | Progresso | Sessões | Dúvidas | Exercícios | Questionário |\n"
+        "|---|---|---|---|---|---|---|---|\n"
+    )
+    lines = [
+        f"| {p.get('anon_code')} | {p.get('stratum')} | {p.get('estado')} | "
+        f"{p.get('progresso_pct')}% | {p.get('sessoes_validas')} | {p.get('duvidas_validas')} | "
+        f"{p.get('exercicios_concluidos')} | {'✅' if p.get('questionario_enviado') else '—'} |"
+        for p in overview
+    ]
+    return header + "\n".join(lines)
+
+
+def researcher_panel_refresh(cls_id, auth):
+    if not _is_admin(auth):
+        return "⛔ Apenas o pesquisador/admin pode acessar este painel.", "", ""
+    if not cls_id:
+        return "Warning: Selecione uma sala do estudo.", "", ""
+    try:
+        config = fetch_latest_study_config(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, cls_id) or {}
+        balance_md = _balance_report_md(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, cls_id)
+        overview = fetch_participants_overview(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, cls_id, config)
+        participants_md = _participants_overview_md(overview)
+    except Exception as exc:
+        return f"ERROR: Não foi possível carregar o painel: {exc}", "", ""
+    return "", balance_md, participants_md
+
+
+def researcher_export_participants(cls_id, auth):
+    if not _is_admin(auth) or not cls_id:
+        return None
+    try:
+        config = fetch_latest_study_config(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, cls_id) or {}
+        overview = fetch_participants_overview(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, cls_id, config)
+    except Exception:
+        return None
+    fieldnames = [
+        "anon_code", "stratum", "group_name", "estado", "progresso_pct",
+        "sessoes_validas", "duvidas_validas", "exercicios_concluidos",
+        "questionario_enviado", "allocated_at",
+    ]
+    tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, newline="", encoding="utf-8")
+    writer = csv.DictWriter(tmp, fieldnames=fieldnames, extrasaction="ignore")
+    writer.writeheader()
+    for row in overview:
+        writer.writerow(row)
+    tmp.close()
+    return tmp.name
+
+
+def researcher_export_credit(cls_id, auth):
+    if not _is_admin(auth) or not cls_id:
+        return None
+    try:
+        config = fetch_latest_study_config(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, cls_id) or {}
+        rows = fetch_credit_list(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, cls_id, config)
+    except Exception:
+        return None
+    fieldnames = ["nome", "email", "situacao", "pontuacao_sugerida_fracao"]
+    tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, newline="", encoding="utf-8")
+    writer = csv.DictWriter(tmp, fieldnames=fieldnames, extrasaction="ignore")
+    writer.writeheader()
+    for row in rows:
+        writer.writerow(row)
+    tmp.close()
+    return tmp.name
+
+
 def build_admin_views(
     *,
     blocks: gr.Blocks,
@@ -1068,7 +1176,7 @@ def build_admin_views(
             navHistory = gr.Button("🗂️ Histórico")
             navEvaluate = gr.Button("📝 Avaliação")
             navProgress = gr.Button("📊 Progresso")
-            navAdmin = gr.Button("🛠️ Administração")
+            navAdmin = gr.Button("🛠️ Painel do Pesquisador")
             btnLogoutAdmin = gr.Button("Sair")
         gr.Markdown("---\n#### Áreas disponíveis dentro da Home do Admin\n")
         with gr.Row():
@@ -1080,12 +1188,25 @@ def build_admin_views(
                 btnAdminListStudents = gr.Button("👥 Ver alunos cadastrados")
 
     with gr.Column(visible=False) as viewAdminPg:
-        gr.Markdown("## 🛠️ Administração (Placeholder)")
+        gr.Markdown("## 📊 Painel do Pesquisador — Modo Estudo")
         gr.Markdown(
-            "- Gerenciar usuários/roles (futuro)\n"
-            "- Parâmetros globais do sistema (futuro)\n"
-            "- Logs/telemetria (futuro)\n"
+            "Acesso restrito (RF-F1 a RF-F7). Mostra participantes/balanceamento "
+            "da sala do estudo; os exports CSV são pseudonimizados (só código "
+            "anônimo, RI-4) — a lista de crédito não tem notas nem grupo (RF-F7)."
         )
+        with gr.Row():
+            rpClassSelect = gr.Dropdown(
+                choices=[], label="Sala do estudo", value=None, allow_custom_value=True
+            )
+            rpRefresh = gr.Button("🔄 Atualizar painel", variant="primary")
+        gr.Markdown("#### Balanceamento (grupo × estrato)")
+        rpBalanceMd = gr.Markdown("Selecione uma sala e clique em Atualizar.")
+        gr.Markdown("#### Participantes")
+        rpParticipantsMd = gr.Markdown("")
+        with gr.Row():
+            rpExportParticipants = gr.DownloadButton("⬇️ Exportar participantes (CSV)")
+            rpExportCredit = gr.DownloadButton("⬇️ Exportar lista de crédito (CSV)")
+        rpMsg = gr.Markdown("")
         with gr.Row():
             adminPgBack = gr.Button("← Voltar à Home do Admin")
 
@@ -1252,11 +1373,33 @@ def build_admin_views(
     navAdmin.click(
         lambda: _go_admin("admin"),
         outputs=[admin_nav_state, viewHomeAdmin, viewClassrooms, viewHistory, viewEvaluate, viewProgress, viewAdminPg],
+    ).then(
+        researcher_panel_open,
+        inputs=[auth_state, classrooms_state],
+        outputs=[rpClassSelect, rpMsg],
     )
 
     adminPgBack.click(
         lambda: _go_admin("home"),
         outputs=[admin_nav_state, viewHomeAdmin, viewClassrooms, viewHistory, viewEvaluate, viewProgress, viewAdminPg],
+    )
+
+    rpRefresh.click(
+        researcher_panel_refresh,
+        inputs=[rpClassSelect, auth_state],
+        outputs=[rpMsg, rpBalanceMd, rpParticipantsMd],
+    )
+
+    rpExportParticipants.click(
+        researcher_export_participants,
+        inputs=[rpClassSelect, auth_state],
+        outputs=rpExportParticipants,
+    )
+
+    rpExportCredit.click(
+        researcher_export_credit,
+        inputs=[rpClassSelect, auth_state],
+        outputs=rpExportCredit,
     )
 
     btnAddClass.click(

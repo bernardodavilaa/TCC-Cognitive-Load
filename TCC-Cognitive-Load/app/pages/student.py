@@ -17,12 +17,28 @@ from services.script_builder import buildCustomScript
 from services.supabase_client import (
     SupabaseConfigurationError,
     SupabaseOperationError,
+    allocate_participant,
+    classify_message,
+    close_study_session,
+    compute_participation,
     create_chat_record,
     create_session_evaluation,
+    create_study_config,
     download_file_from_bucket,
+    fetch_final_questionnaire,
+    fetch_latest_study_config,
+    fetch_open_session,
+    fetch_participant_by_student,
+    fetch_pending_evaluation_session,
     fetch_student_document_metadata,
     fetch_student_profile,
+    generate_allocation_blocks,
     list_student_chats,
+    log_study_event,
+    mark_session_evaluation_done,
+    start_study_session,
+    submit_final_questionnaire,
+    touch_session_activity,
     upload_file_to_bucket,
     upsert_student_profile,
 )
@@ -61,6 +77,7 @@ from app.utils import (
 class StudentViews:
     rooms_view: gr.Column
     setup_view: gr.Column
+    study_intro_view: gr.Column
     rooms_dropdown: gr.Dropdown
     rooms_refresh: gr.Button
     rooms_info: gr.Markdown
@@ -70,6 +87,7 @@ class StudentViews:
     documents_notice: gr.Markdown
     documents_state: gr.State
     enter_setup_button: gr.Button
+    final_quest_button: gr.Button
     rooms_back_button: gr.Button
     config_column: gr.Column
     chat_column: gr.Column
@@ -343,7 +361,43 @@ def _student_store_download(bytes_data: bytes, filename: str) -> str:
     return file_path
 
 
-def _render_class_details(cls_id: Optional[str], classrooms, subjects_by_class):
+def _render_study_progress_md(cls_id, auth_state):
+    """RF-D2/D4: barra de progresso (texto) + explicação do que conta.
+    Cegamento (RF-D7): nunca menciona grupo/controle/experimental."""
+    student_id = _auth_user_id(auth_state)
+    if not student_id:
+        return ""
+    try:
+        participant = fetch_participant_by_student(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, student_id)
+        if not participant:
+            return ""
+        config = fetch_latest_study_config(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, cls_id) or {}
+        stats = compute_participation(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, participant["id"], config)
+    except Exception:
+        return ""
+
+    meta_sessoes = config.get("meta_sessoes", 3)
+    meta_duvidas = config.get("meta_duvidas", 6)
+    meta_exercicios = config.get("meta_exercicios", 4)
+    quest_txt = "enviado ✅" if stats["questionario_enviado"] else "pendente"
+    done_icon = lambda done: "✅" if done else "⬜"
+    return (
+        f"\n---\n"
+        f"### 📊 Sua participação: {stats['progresso_pct']:.0f}%\n"
+        f"- {done_icon(stats['sessoes_validas'] >= meta_sessoes)} Sessões: "
+        f"{stats['sessoes_validas']}/{meta_sessoes}\n"
+        f"- {done_icon(stats['duvidas_validas'] >= meta_duvidas)} Dúvidas teóricas: "
+        f"{stats['duvidas_validas']}/{meta_duvidas}\n"
+        f"- {done_icon(stats['exercicios_concluidos'] >= meta_exercicios)} Exercícios concluídos: "
+        f"{stats['exercicios_concluidos']}/{meta_exercicios}\n"
+        f"- {done_icon(stats['questionario_enviado'])} Questionário final: {quest_txt}\n"
+        f"\n_Uma sessão conta quando você conversa por tempo suficiente e "
+        f"responde à avaliação ao final. A participação completa vale "
+        f"pontos extras na disciplina._\n"
+    )
+
+
+def _render_class_details(cls_id: Optional[str], classrooms, subjects_by_class, auth_state=None):
     c = _get_class_by_id(classrooms, cls_id)
     if not c:
         return "Warning: Selecione uma sala."
@@ -363,13 +417,16 @@ def _render_class_details(cls_id: Optional[str], classrooms, subjects_by_class):
     subs = subjects_by_class.get(cls_id, [])
     subs_txt = ", ".join([s["name"]
                          for s in subs if s.get("active", True)]) or "—"
-    return (
+    md = (
         f"## {c['name']}\n"
         f"- **Tema da sala:** _{theme}_\n"
         f"- 👩‍🏫 **Professores:** {teachers}\n"
         f"- 🎓 **Alunos:** {students}\n"
         f"- 🧩 **Subtemas disponíveis:** {subs_txt}\n"
     )
+    if c.get("study_mode") and auth_state is not None:
+        md += _render_study_progress_md(cls_id, auth_state)
+    return md
 
 
 def _student_subtheme_choices(cls_id: Optional[str], subjects_by_class: Dict[str, Sequence[Dict[str, Any]]]):
@@ -451,12 +508,33 @@ def student_setup_from_class(selected_id, classrooms, subjects_by_class, current
     )
 
 
+def _student_final_quest_button_update(cls_id, classrooms, auth_state):
+    c = _get_class_by_id(classrooms or [], cls_id)
+    if not c or not c.get("study_mode"):
+        return gr.update(visible=False)
+    student_id = _auth_user_id(auth_state)
+    if not student_id:
+        return gr.update(visible=False)
+    try:
+        participant = fetch_participant_by_student(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, student_id)
+        if not participant:
+            return gr.update(visible=False)
+        already = fetch_final_questionnaire(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, participant["id"])
+        if already:
+            return gr.update(visible=False)
+        config = fetch_latest_study_config(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, cls_id) or {}
+        stats = compute_participation(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, participant["id"], config)
+    except Exception:
+        return gr.update(visible=False)
+    return gr.update(visible=bool(stats.get("questionario_liberado")))
+
+
 def student_rooms_refresh(auth, classrooms, subjects_by_class):
     my = _student_classes(auth, classrooms or [])
     choices = [(c["name"], c["id"]) for c in my]
     default = choices[0][1] if choices else None
     info = (
-        _render_class_details(default, classrooms, subjects_by_class or {})
+        _render_class_details(default, classrooms, subjects_by_class or {}, auth)
         if default
         else "Warning: Você ainda não está em nenhuma sala."
     )
@@ -464,6 +542,7 @@ def student_rooms_refresh(auth, classrooms, subjects_by_class):
     docs_md = _render_student_documents_md(default, classrooms)
     dropdown_update = _student_documents_dropdown(classrooms, default)
     notice = _student_documents_notice(docs)
+    quest_btn = _student_final_quest_button_update(default, classrooms, auth)
     return (
         gr.update(choices=choices, value=default),
         info,
@@ -473,22 +552,25 @@ def student_rooms_refresh(auth, classrooms, subjects_by_class):
         docs,
         _student_reset_download_button(),
         gr.update(value=notice),
+        quest_btn,
     )
 
 
-def student_on_select(cid, classrooms, subjects_by_class):
+def student_on_select(cid, classrooms, subjects_by_class, auth_state=None):
     docs = _student_class_documents(classrooms, cid)
     docs_md = _render_student_documents_md(cid, classrooms)
     dropdown_update = _student_documents_dropdown(classrooms, cid)
     notice = _student_documents_notice(docs)
+    quest_btn = _student_final_quest_button_update(cid, classrooms, auth_state)
     return (
-        _render_class_details(cid, classrooms, subjects_by_class),
+        _render_class_details(cid, classrooms, subjects_by_class, auth_state),
         cid,
         gr.update(value=docs_md),
         dropdown_update,
         docs,
         _student_reset_download_button(),
         gr.update(value=notice),
+        quest_btn,
     )
 
 
@@ -616,6 +698,7 @@ def student_auto_open_rooms(
             no_update,
             no_update,
             no_update,
+            no_update,
         )
 
     (
@@ -627,6 +710,7 @@ def student_auto_open_rooms(
         docs_state,
         download_btn_update,
         docs_notice_update,
+        quest_btn_update,
     ) = student_rooms_refresh(auth, classrooms, subjects_by_class)
     history_update = student_history_dropdown(
         auth, classrooms, current_history_value
@@ -644,6 +728,7 @@ def student_auto_open_rooms(
         download_btn_update,
         docs_notice_update,
         history_update,
+        quest_btn_update,
     )
 
 
@@ -655,22 +740,136 @@ def student_set_exit_label():
     return gr.update(value="Sair")
 
 
+def _reveal_setup_updates(c, cid, subjects_by_class):
+    theme = c.get("theme_name") or c["name"]
+    subs = _student_subtheme_choices(cid, subjects_by_class or {})
+    return gr.update(value=theme), gr.update(choices=subs, value=subs)
+
+
 def student_go_setup(auth, cid, classrooms, subjects_by_class):
+    """Roteia pra configuração da sala — ou, se a sala é do Modo Estudo
+    (RF-A0.1) e o aluno ainda não tem alocação, pra etapa inicial primeiro.
+    Alocação já feita nunca refaz a etapa inicial (RF-A4/RF-A0.1: "não pode
+    ser refeita")."""
     c = _get_class_by_id(classrooms, cid)
     if not c:
         return (
             gr.update(visible=True),
             gr.update(visible=False),
+            gr.update(visible=False),
             gr.update(value=""),
             gr.update(choices=[]),
+            {},
         )
-    theme = c.get("theme_name") or c["name"]
-    subs = _student_subtheme_choices(cid, subjects_by_class or {})
+
+    if c.get("study_mode"):
+        student_id = _auth_user_id(auth)
+        participant = None
+        try:
+            participant = fetch_participant_by_student(
+                SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, student_id
+            )
+        except Exception:
+            participant = None
+        if not participant:
+            return (
+                gr.update(visible=False),
+                gr.update(visible=True),
+                gr.update(visible=False),
+                gr.update(),
+                gr.update(),
+                {},
+            )
+        theme_update, subs_update = _reveal_setup_updates(c, cid, subjects_by_class)
+        return (
+            gr.update(visible=False),
+            gr.update(visible=False),
+            gr.update(visible=True),
+            theme_update,
+            subs_update,
+            participant,
+        )
+
+    theme_update, subs_update = _reveal_setup_updates(c, cid, subjects_by_class)
+    return (
+        gr.update(visible=False),
+        gr.update(visible=False),
+        gr.update(visible=True),
+        theme_update,
+        subs_update,
+        {},
+    )
+
+
+def student_submit_study_intro(auth, cid, classrooms, subjects_by_class, e1, e2, e3):
+    """RF-A0/RF-A1: valida a etapa inicial, aloca o participante (criando a
+    config/blocos do estudo sob demanda na primeira vez) e libera o chat."""
+    c = _get_class_by_id(classrooms, cid)
+    if not c:
+        return gr.update(), gr.update(), gr.update(), gr.update(), {}, "Warning: Sala não encontrada."
+    if not e1 or not e2 or not e3:
+        return (
+            gr.update(visible=True),
+            gr.update(visible=False),
+            gr.update(),
+            gr.update(),
+            {},
+            "Warning: Responda as três perguntas pra continuar.",
+        )
+
+    student_id = _auth_user_id(auth)
+    if not student_id:
+        return gr.update(), gr.update(), gr.update(), gr.update(), {}, "Warning: Faça login."
+
+    try:
+        config = fetch_latest_study_config(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, cid)
+        if not config:
+            config = create_study_config(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, classroom_id=cid)
+            generate_allocation_blocks(
+                SUPABASE_URL,
+                SUPABASE_SERVICE_ROLE_KEY,
+                classroom_id=cid,
+                config_version=config["version"],
+                seed=config["random_seed"],
+                n_blocks_per_stratum=20,
+            )
+        participant = allocate_participant(
+            SUPABASE_URL,
+            SUPABASE_SERVICE_ROLE_KEY,
+            student_id=student_id,
+            classroom_id=cid,
+            config_version=config["version"],
+            e1_contato_previo=e1,
+            e2_nivel_atual=int(e2),
+            e3_ja_cursou=e3,
+        )
+    except SupabaseConfigurationError:
+        return (
+            gr.update(visible=True),
+            gr.update(visible=False),
+            gr.update(),
+            gr.update(),
+            {},
+            "Warning: Configure SUPABASE_URL e SUPABASE_SERVICE_ROLE_KEY.",
+        )
+    except SupabaseOperationError as err:
+        return (
+            gr.update(visible=True),
+            gr.update(visible=False),
+            gr.update(),
+            gr.update(),
+            {},
+            f"Warning: Não foi possível iniciar agora, tente novamente. ({err})",
+        )
+
+    theme_update, subs_update = _reveal_setup_updates(c, cid, subjects_by_class)
     return (
         gr.update(visible=False),
         gr.update(visible=True),
-        gr.update(value=theme),
-        gr.update(choices=subs, value=subs),
+        theme_update,
+        subs_update,
+        participant,
+        "",
     )
 
 
@@ -701,6 +900,7 @@ def student_apply_setup(
     self_rating=None,
     auth_state=None,
     curso_periodo=None,
+    study_participant=None,
 ):
     extras = _build_extras_from_classroom(theme, subthemes, interesses)
     new_script = buildCustomScript(
@@ -714,8 +914,15 @@ def student_apply_setup(
     )
 
     classroom = _get_class_by_id(classrooms or [], cid)
+    # RF-A6: dentro da sala do estudo, quem decide PAGE on/off é o grupo
+    # alocado do aluno (study_participant), não o flag page_enabled da sala
+    # — esse flag só vale fora do Modo Estudo.
+    if (classroom or {}).get("study_mode") and (study_participant or {}).get("group_name"):
+        page_enabled = study_participant["group_name"] == "experimental"
+    else:
+        page_enabled = bool((classroom or {}).get("page_enabled"))
     page_context = {
-        "enabled": bool((classroom or {}).get("page_enabled")),
+        "enabled": page_enabled,
         "profile": build_interim_profile(
             estilo, detalhamento, interesses, prior_experience, self_rating
         ),
@@ -742,7 +949,233 @@ def student_apply_setup(
         except Exception as exc:  # pragma: no cover - não deve bloquear o chat
             print(f"[PROFILE] Falha ao salvar perfil do aluno: {exc}")
 
-    return new_script, gr.update(visible=False), gr.update(visible=True), page_context
+    # RF-B1 (aprox.): abre/reaproveita a sessão do estudo quando a sala é do
+    # Modo Estudo. O grupo efetivo vem da alocação do aluno (RF-A6).
+    study_session: Dict[str, Any] = {}
+    if study_participant and (classroom or {}).get("study_mode"):
+        effective_group = "experimental" if page_enabled else "controle"
+        try:
+            existing_open = fetch_open_session(
+                SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, study_participant["id"]
+            )
+            study_session = existing_open or start_study_session(
+                SUPABASE_URL,
+                SUPABASE_SERVICE_ROLE_KEY,
+                participant_id=study_participant["id"],
+                classroom_id=cid,
+                effective_group=effective_group,
+                config_version=study_participant.get("config_version"),
+            )
+            if not existing_open:
+                log_study_event(
+                    SUPABASE_URL,
+                    SUPABASE_SERVICE_ROLE_KEY,
+                    participant_id=study_participant["id"],
+                    classroom_id=cid,
+                    effective_group=effective_group,
+                    event_type="session_start",
+                    session_id=study_session.get("id"),
+                )
+            study_session = dict(study_session)
+            study_session["classroom_id"] = cid
+            study_session["effective_group"] = effective_group
+        except Exception as exc:  # pragma: no cover - não deve bloquear o chat
+            print(f"[STUDY] Falha ao iniciar sessão do estudo: {exc}")
+            study_session = {}
+
+    return (
+        new_script,
+        gr.update(visible=False),
+        gr.update(visible=True),
+        page_context,
+        study_session,
+    )
+
+
+def _student_track_study_turn(chats_state, current_chat_id, study_participant, study_session, study_exercise=None):
+    """Loga 1 evento 'message' por turno do aluno (RF-B6) e acumula tempo
+    ativo com teto por intervalo (RF-B2/IDLE_CAP_MIN). Roda só quando a sala
+    é do Modo Estudo (study_participant/study_session presentes)."""
+    if not study_participant or not (study_session or {}).get("id"):
+        return study_session
+
+    entry = (chats_state or {}).get(current_chat_id) or {}
+    messages = entry.get("messages") or []
+    last_user = None
+    for m in reversed(messages):
+        if m.get("role") == "user":
+            last_user = m
+            break
+    if not last_user:
+        return study_session
+
+    now_ts = _now_ts()
+    last_activity = study_session.get("last_activity_ts") or now_ts
+    cap_seconds = 5 * 60  # IDLE_CAP_MIN default (RF-B2)
+    delta = min(max(0, now_ts - last_activity), cap_seconds)
+    active_seconds = int(study_session.get("active_seconds") or 0) + delta
+    msg_count = int(study_session.get("student_message_count") or 0) + 1
+    text = last_user.get("content") or ""
+    # RF-B5: só classifica teórica/outra fora do modo exercício; dentro,
+    # a mensagem conta pro exercício (via _student_track_exercise_turn), não
+    # como dúvida teórica.
+    in_exercise = bool((study_exercise or {}).get("id"))
+    category = "exercicio" if in_exercise else classify_message(text if isinstance(text, str) else "")
+    # RF-B7: meta de page_applied/fallback/latências que bot() deixou em
+    # chats_state pro último turno — prova (ou não) que a 2ª chamada ocorreu.
+    page_meta = entry.get("last_turn_page_meta") or {}
+
+    try:
+        touch_session_activity(
+            SUPABASE_URL,
+            SUPABASE_SERVICE_ROLE_KEY,
+            study_session["id"],
+            active_seconds=active_seconds,
+            student_message_count=msg_count,
+            had_fallback=bool(page_meta.get("fallback")),
+        )
+        log_study_event(
+            SUPABASE_URL,
+            SUPABASE_SERVICE_ROLE_KEY,
+            participant_id=study_participant["id"],
+            classroom_id=study_session.get("classroom_id"),
+            effective_group=study_session.get("effective_group", "controle"),
+            event_type="message",
+            session_id=study_session["id"],
+            message_category=category,
+            meta={
+                "text_normalized": text.strip().lower()[:300] if isinstance(text, str) else "",
+                **page_meta,
+            },
+        )
+    except Exception as exc:  # pragma: no cover - não deve bloquear o chat
+        print(f"[STUDY] Falha ao registrar evento de mensagem: {exc}")
+
+    study_session = dict(study_session)
+    study_session["active_seconds"] = active_seconds
+    study_session["student_message_count"] = msg_count
+    study_session["last_activity_ts"] = now_ts
+    return study_session
+
+
+def _student_track_exercise_turn(chats_state, current_chat_id, study_exercise):
+    """Companheiro de _student_track_study_turn: quando o modo exercício
+    está ligado (RF-B4), conta a mensagem do aluno pro exercício em vez da
+    classificação teórica/outra."""
+    if not (study_exercise or {}).get("id"):
+        return study_exercise
+    entry = (chats_state or {}).get(current_chat_id) or {}
+    messages = entry.get("messages") or []
+    has_user_msg = any(m.get("role") == "user" for m in messages)
+    if not has_user_msg:
+        return study_exercise
+    study_exercise = dict(study_exercise)
+    study_exercise["message_count"] = int(study_exercise.get("message_count") or 0) + 1
+    return study_exercise
+
+
+def student_toggle_exercise(turned_on, study_participant, study_session, study_exercise):
+    """RF-B4: liga abre um registro de exercício; desliga pergunta se
+    concluiu/desistiu/quer continuar."""
+    if not study_participant or not (study_session or {}).get("id"):
+        return (
+            study_exercise or {},
+            gr.update(value=False),
+            gr.update(visible=False),
+            gr.update(visible=False),
+            gr.update(visible=False),
+            "Warning: Modo exercício só funciona dentro de uma sala do Modo Estudo.",
+        )
+
+    if turned_on:
+        if (study_exercise or {}).get("id"):
+            return study_exercise, gr.update(), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), ""
+        try:
+            new_exercise = start_exercise(
+                SUPABASE_URL,
+                SUPABASE_SERVICE_ROLE_KEY,
+                session_id=study_session["id"],
+                participant_id=study_participant["id"],
+            )
+            log_study_event(
+                SUPABASE_URL,
+                SUPABASE_SERVICE_ROLE_KEY,
+                participant_id=study_participant["id"],
+                classroom_id=study_session.get("classroom_id"),
+                effective_group=study_session.get("effective_group", "controle"),
+                event_type="exercise_start",
+                session_id=study_session["id"],
+                exercise_id=new_exercise.get("id"),
+            )
+        except Exception as exc:
+            return (
+                {},
+                gr.update(value=False),
+                gr.update(visible=False),
+                gr.update(visible=False),
+                gr.update(visible=False),
+                f"Warning: Não foi possível iniciar o exercício: {exc}",
+            )
+        new_exercise = dict(new_exercise)
+        new_exercise["message_count"] = 0
+        return new_exercise, gr.update(), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), ""
+
+    # desligou: se não havia exercício aberto, nada a fazer
+    if not (study_exercise or {}).get("id"):
+        return study_exercise or {}, gr.update(), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), ""
+    return (
+        study_exercise,
+        gr.update(),
+        gr.update(visible=True, value=None),
+        gr.update(visible=True, value=""),
+        gr.update(visible=True),
+        "",
+    )
+
+
+def student_confirm_exercise_outcome(outcome, reason, study_participant, study_session, study_exercise):
+    """RN-4: só conta como concluído com >= EX_MIN_MSG_ALUNO mensagens do
+    aluno dentro do exercício (parâmetro do study_config vigente)."""
+    if not (study_exercise or {}).get("id"):
+        return {}, gr.update(value=False), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), ""
+
+    if outcome == "Continuar" or not outcome:
+        return study_exercise, gr.update(value=True), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), ""
+
+    status = "concluido" if outcome == "Concluí" else "desistiu"
+    msg_count = int(study_exercise.get("message_count") or 0)
+
+    try:
+        config = fetch_latest_study_config(
+            SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, study_session.get("classroom_id")
+        ) or {}
+        min_msgs = int(config.get("ex_min_msg_aluno", 3))
+        if status == "concluido" and msg_count < min_msgs:
+            status = "interrompido"
+        end_exercise(
+            SUPABASE_URL,
+            SUPABASE_SERVICE_ROLE_KEY,
+            study_exercise["id"],
+            status=status,
+            student_message_count=msg_count,
+            motivo_desistencia=(reason or "").strip() or None if status == "desistiu" else None,
+        )
+        log_study_event(
+            SUPABASE_URL,
+            SUPABASE_SERVICE_ROLE_KEY,
+            participant_id=(study_participant or {}).get("id"),
+            classroom_id=study_session.get("classroom_id"),
+            effective_group=study_session.get("effective_group", "controle"),
+            event_type="exercise_end",
+            session_id=study_session.get("id"),
+            exercise_id=study_exercise["id"],
+            meta={"status": status, "student_message_count": msg_count},
+        )
+        msg = "OK: Exercício registrado."
+    except Exception as exc:
+        msg = f"Warning: Não foi possível registrar o exercício: {exc}"
+
+    return {}, gr.update(value=False), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), msg
 
 
 def _student_chat_back_to_setup():
@@ -774,6 +1207,8 @@ def student_end_chat(
     selected_subjects,
     student_goal=None,
     student_interests=None,
+    study_participant=None,
+    study_session=None,
 ):
     chat_history = history if isinstance(history, list) else []
     docs = docs_state if isinstance(docs_state, dict) else {}
@@ -999,10 +1434,48 @@ def student_end_chat(
     )
     gr.Info("Antes de continuar, avalie rapidinho sua experiência 👇")
 
+    effective_page_enabled = bool((selected_classroom or {}).get("page_enabled"))
+    if (selected_classroom or {}).get("study_mode") and (study_participant or {}).get("group_name"):
+        effective_page_enabled = study_participant["group_name"] == "experimental"
+
+    if study_participant and (study_session or {}).get("id"):
+        try:
+            config = fetch_latest_study_config(
+                SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, selected_class
+            ) or {}
+            min_active_s = int(config.get("sessao_min_ativo_min", 10)) * 60
+            min_msgs = int(config.get("sessao_min_msg_aluno", 6))
+            activity_ok = (
+                int(study_session.get("active_seconds") or 0) >= min_active_s
+                and int(study_session.get("student_message_count") or 0) >= min_msgs
+            )
+            close_study_session(
+                SUPABASE_URL,
+                SUPABASE_SERVICE_ROLE_KEY,
+                study_session["id"],
+                end_reason="manual",
+                is_valid=activity_ok,
+                chat_id=supabase_chat_id,
+            )
+            log_study_event(
+                SUPABASE_URL,
+                SUPABASE_SERVICE_ROLE_KEY,
+                participant_id=study_participant["id"],
+                classroom_id=selected_class,
+                effective_group=study_session.get("effective_group", "controle"),
+                event_type="session_end",
+                session_id=study_session["id"],
+                meta={"end_reason": "manual", "is_valid": activity_ok},
+            )
+        except Exception as exc:  # pragma: no cover - não deve bloquear o chat
+            print(f"[STUDY] Falha ao encerrar sessão do estudo: {exc}")
+
     chat_context = {
         "chat_id": supabase_chat_id,
         "classroom_id": selected_class,
-        "page_enabled": bool((selected_classroom or {}).get("page_enabled")),
+        "page_enabled": effective_page_enabled,
+        "study_participant_id": (study_participant or {}).get("id"),
+        "study_session_id": (study_session or {}).get("id"),
     }
 
     return (
@@ -1054,8 +1527,71 @@ def student_submit_evaluation(
             comentario=comentario,
         )
         gr.Info("Obrigado pela avaliação! 🙏")
+        if context.get("study_session_id"):
+            try:
+                # RF-B3/RN-2: avaliação enviada é condição p/ sessão válida.
+                mark_session_evaluation_done(
+                    SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, context["study_session_id"]
+                )
+                log_study_event(
+                    SUPABASE_URL,
+                    SUPABASE_SERVICE_ROLE_KEY,
+                    participant_id=context.get("study_participant_id"),
+                    classroom_id=context.get("classroom_id"),
+                    effective_group="experimental" if context.get("page_enabled") else "controle",
+                    event_type="evaluation_submitted",
+                    session_id=context.get("study_session_id"),
+                )
+            except Exception as exc:  # pragma: no cover - não deve travar a navegação
+                print(f"[STUDY] Falha ao marcar avaliação como enviada: {exc}")
     except Exception as exc:  # pragma: no cover - não deve travar a navegação
         gr.Warning(f"Não foi possível salvar sua avaliação: {exc}")
+
+    return gr.update(visible=False), gr.update(visible=True), ""
+
+
+def student_open_final_questionnaire():
+    return gr.update(visible=False), gr.update(visible=True)
+
+
+def student_submit_final_questionnaire(auth_state, q1, q2, q3, q4, q5, q6, q7):
+    """RF-E1: uma resposta por participante, não editável depois."""
+    student_id = _auth_user_id(auth_state)
+    if not student_id:
+        return gr.update(visible=True), gr.update(visible=False), "Warning: Faça login."
+
+    try:
+        participant = fetch_participant_by_student(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, student_id)
+        if not participant:
+            return gr.update(visible=True), gr.update(visible=False), "Warning: Você ainda não está alocado em nenhuma sala do estudo."
+        if fetch_final_questionnaire(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, participant["id"]):
+            gr.Info("Você já respondeu o questionário final — obrigado!")
+            return gr.update(visible=False), gr.update(visible=True), ""
+        submit_final_questionnaire(
+            SUPABASE_URL,
+            SUPABASE_SERVICE_ROLE_KEY,
+            participant_id=participant["id"],
+            group_name=participant["group_name"],
+            q1_ajudou_estudos=int(q1),
+            q2_recomendaria=int(q2),
+            q3_exemplos_relevantes=int(q3),
+            q4_reduziu_ansiedade=int(q4),
+            q5_facil_entender=int(q5),
+            q6_nps=int(q6) if q6 not in (None, "") else None,
+            q7_comentario=(q7 or "").strip() or None,
+        )
+        log_study_event(
+            SUPABASE_URL,
+            SUPABASE_SERVICE_ROLE_KEY,
+            participant_id=participant["id"],
+            classroom_id=participant["classroom_id"],
+            effective_group=participant["group_name"],
+            event_type="questionnaire_submitted",
+        )
+        gr.Info("Obrigado por responder o questionário final! 🎉")
+    except Exception as exc:
+        gr.Warning(f"Não foi possível salvar o questionário: {exc}")
+        return gr.update(visible=True), gr.update(visible=False), f"Warning: {exc}"
 
     return gr.update(visible=False), gr.update(visible=True), ""
 
@@ -1144,6 +1680,9 @@ def build_student_views(
     student_documents_state = gr.State([])
     page_profile_state = gr.State({})
     last_chat_context_state = gr.State({})
+    study_participant_state = gr.State({})
+    study_session_state = gr.State({})
+    study_exercise_state = gr.State({})
 
     with gr.Column(visible=False) as viewStudentRooms:
         gr.Markdown("## 🎒 Minhas Salas")
@@ -1170,6 +1709,8 @@ def build_student_views(
         with gr.Row():
             stEnterRoomChatSetup = gr.Button(
                 "💬 Entrar no chat da sala", variant="primary")
+            btnStudyFinalQuest = gr.Button(
+                "📋 Responder questionário final", visible=False, variant="secondary")
             stRoomsBack = gr.Button("← Voltar à Home")
         with gr.Accordion("Histórico de Chats", open=False):
             with gr.Row():
@@ -1218,6 +1759,30 @@ def build_student_views(
                 elem_classes=["history-box"],
             )
             stHistoryNotice = gr.Markdown("")
+
+    with gr.Column(visible=False) as viewStudyIntro:
+        gr.Markdown("## Antes de começar")
+        gr.Markdown(
+            "Três perguntas rápidas (menos de 1 minuto) antes de entrar na "
+            "sala. É só uma vez — suas respostas não são editáveis depois."
+        )
+        siE1 = gr.Radio(
+            choices=["Não", "Um pouco", "Sim"],
+            value=None,
+            label="Você já teve contato com programação antes desta disciplina?",
+        )
+        siE2 = gr.Slider(
+            1, 5, value=3, step=1,
+            label="Como você avalia seu nível atual em programação? "
+                  "(1 = nunca vi; 5 = tenho boa base)",
+        )
+        siE3 = gr.Radio(
+            choices=["Sim", "Não"],
+            value=None,
+            label="Você já cursou esta disciplina antes?",
+        )
+        btnStudySubmitIntro = gr.Button("Começar", variant="primary")
+        studyIntroMsg = gr.Markdown("")
 
     with gr.Column(visible=False) as viewStudentSetup:
         gr.Markdown("## 🧩Chat da Sala")
@@ -1268,6 +1833,22 @@ def build_student_views(
                     label="Chat (Sala)", type="messages", height=420)
                 #with gr.Row():
                 #    stClear = gr.Button("Limpar chat")
+                stExerciseToggle = gr.Checkbox(
+                    value=False, label="📝 Estou resolvendo um exercício"
+                )
+                stExerciseOutcome = gr.Radio(
+                    choices=["Concluí", "Desisti", "Continuar"],
+                    value=None,
+                    label="Você concluiu este exercício?",
+                    visible=False,
+                )
+                stExerciseReason = gr.Textbox(
+                    label="Motivo (opcional, se desistiu)",
+                    placeholder="dificuldade conceitual, sintaxe, falta de tempo...",
+                    visible=False,
+                )
+                stExerciseConfirm = gr.Button("Confirmar", visible=False)
+                stExerciseMsg = gr.Markdown("")
                 with gr.Row():
                     #stBackToSetup = gr.Button("⬅️ Voltar para configuração da sala")
                     stEndChat = gr.Button("Encerrar Chat", variant="stop")
@@ -1320,6 +1901,29 @@ def build_student_views(
         btnSubmitEval = gr.Button("Enviar avaliação", variant="primary")
         evalMsg = gr.Markdown("")
 
+    with gr.Column(visible=False) as viewStudyFinalQuestionnaire:
+        gr.Markdown("## 📋 Questionário final")
+        gr.Markdown(
+            "Última etapa da pesquisa — leva menos de 2 minutos. "
+            "Só pode ser respondido uma vez."
+        )
+        fqQ1 = gr.Slider(1, 5, value=3, step=1, label="O tutor virtual ajudou você nos seus estudos?")
+        fqQ2 = gr.Slider(1, 5, value=3, step=1, label="Você recomendaria essa plataforma para colegas?")
+        fqQ3 = gr.Slider(
+            1, 5, value=3, step=1,
+            label="Os exemplos e explicações pareceram relevantes para o seu contexto "
+                  "pessoal (interesses, curso, forma de aprender)?",
+        )
+        fqQ4 = gr.Slider(
+            1, 5, value=3, step=1,
+            label="O tutor reduziu sua sensação de dificuldade ou ansiedade ao estudar o conteúdo?",
+        )
+        fqQ5 = gr.Slider(1, 5, value=3, step=1, label="As explicações foram fáceis de entender e adequadas ao seu nível?")
+        fqQ6 = gr.Slider(0, 10, value=None, step=1, label="De 0 a 10, o quanto você recomendaria essa ferramenta? (opcional)")
+        fqQ7 = gr.Textbox(label="O que mais ajudou você? O que você mudaria? (opcional)", lines=3)
+        btnSubmitFinalQuest = gr.Button("Enviar questionário final", variant="primary")
+        finalQuestMsg = gr.Markdown("")
+
     stRoomsRefresh.click(
         student_rooms_refresh,
         inputs=[auth_state, classrooms_state, subjects_state],
@@ -1332,6 +1936,7 @@ def build_student_views(
             student_documents_state,
             stDocsDownload,
             stDocsNotice,
+            btnStudyFinalQuest,
         ],
     ).then(
         student_history_dropdown,
@@ -1341,7 +1946,7 @@ def build_student_views(
 
     stRoomSelect.change(
         student_on_select,
-        inputs=[stRoomSelect, classrooms_state, subjects_state],
+        inputs=[stRoomSelect, classrooms_state, subjects_state, auth_state],
         outputs=[
             stRoomInfo,
             student_selected_class,
@@ -1350,7 +1955,19 @@ def build_student_views(
             student_documents_state,
             stDocsDownload,
             stDocsNotice,
+            btnStudyFinalQuest,
         ],
+    )
+
+    btnStudyFinalQuest.click(
+        student_open_final_questionnaire,
+        outputs=[viewStudentRooms, viewStudyFinalQuestionnaire],
+    )
+
+    btnSubmitFinalQuest.click(
+        student_submit_final_questionnaire,
+        inputs=[auth_state, fqQ1, fqQ2, fqQ3, fqQ4, fqQ5, fqQ6, fqQ7],
+        outputs=[viewStudyFinalQuestionnaire, viewStudentRooms, finalQuestMsg],
     )
 
     stDocsSelect.change(
@@ -1390,7 +2007,16 @@ def build_student_views(
         student_go_setup,
         inputs=[auth_state, student_selected_class,
                 classrooms_state, subjects_state],
-        outputs=[viewStudentRooms, viewStudentSetup, stAssunto, stSubthemes],
+        outputs=[viewStudentRooms, viewStudyIntro, viewStudentSetup, stAssunto,
+                 stSubthemes, study_participant_state],
+    )
+
+    btnStudySubmitIntro.click(
+        student_submit_study_intro,
+        inputs=[auth_state, student_selected_class, classrooms_state,
+                subjects_state, siE1, siE2, siE3],
+        outputs=[viewStudyIntro, viewStudentSetup, stAssunto, stSubthemes,
+                 study_participant_state, studyIntroMsg],
     )
 
     stSubmit.click(
@@ -1409,8 +2035,9 @@ def build_student_views(
             stSelfRating,
             auth_state,
             stCursoPeriodo,
+            study_participant_state,
         ],
-        outputs=[script_state, stCfgCol, stChatCol, page_profile_state],
+        outputs=[script_state, stCfgCol, stChatCol, page_profile_state, study_session_state],
     )
 
     stChatInput.submit(
@@ -1424,7 +2051,31 @@ def build_student_views(
         inputs=[stChatbot, docs_state, script_state,
                 adv_state, current_chat_id, chats_state, page_profile_state],
         outputs=stChatbot,
+    ).then(
+        _student_track_study_turn,
+        inputs=[chats_state, current_chat_id, study_participant_state,
+                study_session_state, study_exercise_state],
+        outputs=study_session_state,
+    ).then(
+        _student_track_exercise_turn,
+        inputs=[chats_state, current_chat_id, study_exercise_state],
+        outputs=study_exercise_state,
     ).then(_student_chat_enable, outputs=stChatInput)
+
+    stExerciseToggle.change(
+        student_toggle_exercise,
+        inputs=[stExerciseToggle, study_participant_state, study_session_state, study_exercise_state],
+        outputs=[study_exercise_state, stExerciseToggle, stExerciseOutcome,
+                 stExerciseReason, stExerciseConfirm, stExerciseMsg],
+    )
+
+    stExerciseConfirm.click(
+        student_confirm_exercise_outcome,
+        inputs=[stExerciseOutcome, stExerciseReason, study_participant_state,
+                study_session_state, study_exercise_state],
+        outputs=[study_exercise_state, stExerciseToggle, stExerciseOutcome,
+                 stExerciseReason, stExerciseConfirm, stExerciseMsg],
+    )
 
     #stClear.click(clearChat, outputs=stChatbot)
 
@@ -1442,6 +2093,8 @@ def build_student_views(
             stSubthemes,
             stObjetivo,
             stInteresses,
+            study_participant_state,
+            study_session_state,
         ],
         outputs=[
             viewStudentSetup,
@@ -1466,6 +2119,7 @@ def build_student_views(
             student_documents_state,
             stDocsDownload,
             stDocsNotice,
+            btnStudyFinalQuest,
         ],
     ).then(
         student_history_dropdown,
@@ -1620,6 +2274,7 @@ def build_student_views(
     return StudentViews(
         rooms_view=viewStudentRooms,
         setup_view=viewStudentSetup,
+        study_intro_view=viewStudyIntro,
         rooms_dropdown=stRoomSelect,
         rooms_refresh=stRoomsRefresh,
         rooms_info=stRoomInfo,
@@ -1629,6 +2284,7 @@ def build_student_views(
         documents_notice=stDocsNotice,
         documents_state=student_documents_state,
         enter_setup_button=stEnterRoomChatSetup,
+        final_quest_button=btnStudyFinalQuest,
         rooms_back_button=stRoomsBack,
         config_column=stCfgCol,
         chat_column=stChatCol,

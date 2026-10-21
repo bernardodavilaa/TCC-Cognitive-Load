@@ -430,6 +430,7 @@ def teacher_load_params(cls_id, classrooms):
             gr.update(value="detalhadas"),
             gr.update(value=""),
             gr.update(value=False),
+            gr.update(value=False),
             "Warning: Sala não encontrada.",
         )
     cfg = c.get("theme_config") or {}
@@ -444,6 +445,7 @@ def teacher_load_params(cls_id, classrooms):
         gr.update(value=script.get("detalhamento", "detalhadas")),
         gr.update(value=script.get("extras", "")),
         gr.update(value=bool(c.get("page_enabled"))),
+        gr.update(value=bool(c.get("study_mode"))),
         "OK: Parâmetros carregados.",
     )
 
@@ -461,6 +463,7 @@ def teacher_save_params(
     subjects,
     auth,
     page_enabled=False,
+    study_mode=False,
 ):
     c = _get_class_by_id(classrooms, cls_id)
     if not c:
@@ -494,6 +497,7 @@ def teacher_save_params(
             SUPABASE_SERVICE_ROLE_KEY,
             cls_id,
             page_enabled=bool(page_enabled),
+            study_mode=bool(study_mode),
         )
     except SupabaseConfigurationError:
         return (
@@ -606,6 +610,7 @@ def teacher_add_classroom(
     auth,
     current_selection=None,
     page_enabled=False,
+    study_mode=False,
 ):
     name = (name or "").strip()
     theme = (theme or "").strip() or name
@@ -658,6 +663,7 @@ def teacher_add_classroom(
             theme_locked=bool(locked),
             created_by=creator_id or "",
             page_enabled=bool(page_enabled),
+            study_mode=bool(study_mode),
         )
     except SupabaseConfigurationError:
         md, dd = _teacher_classrooms_outputs(
@@ -1376,6 +1382,10 @@ def build_teacher_view(
                     value=False,
                     label="Habilitar personalização PAGE (grupo experimental)",
                 )
+                tClsStudyMode = gr.Checkbox(
+                    value=False,
+                    label="Esta é a sala do estudo (Modo Estudo: alocação por aluno)",
+                )
                 btnTeacherAddClass = gr.Button("➕ Criar sala", variant="primary")
         with gr.Accordion("Selecionar sala", open=False):
             with gr.Row():
@@ -1440,6 +1450,10 @@ def build_teacher_view(
             tParamsPageEnabled = gr.Checkbox(
                 value=False,
                 label="Habilitar personalização PAGE (grupo experimental)",
+            )
+            tParamsStudyMode = gr.Checkbox(
+                value=False,
+                label="Esta é a sala do estudo (Modo Estudo: alocação por aluno)",
             )
             with gr.Row():
                 btnTeacherSaveParams = gr.Button("💾 Salvar parâmetros da sala", variant="primary")
@@ -1525,7 +1539,7 @@ def build_teacher_view(
     btnTeacherLoadParams.click(
         teacher_load_params,
         inputs=[tSelectClass, classrooms_state],
-        outputs=[tTemp, tTopP, tTopK, tMaxT, tEstilo, tDetalhamento, tExtras, tParamsPageEnabled, tParamsMsg],
+        outputs=[tTemp, tTopP, tTopK, tMaxT, tEstilo, tDetalhamento, tExtras, tParamsPageEnabled, tParamsStudyMode, tParamsMsg],
     )
 
     btnTeacherSaveParams.click(
@@ -1543,6 +1557,7 @@ def build_teacher_view(
             subjects_state,
             auth_state,
             tParamsPageEnabled,
+            tParamsStudyMode,
         ],
         outputs=[classrooms_state, subjects_state, tParamsMsg],
     )
@@ -1559,6 +1574,7 @@ def build_teacher_view(
             auth_state,
             tSelectClass,
             tClsPageEnabled,
+            tClsStudyMode,
         ],
         outputs=[classrooms_state, subjects_state, tClassroomsMd, tSelectClass, tSelectClass, teacherNotice],
     ).then(
