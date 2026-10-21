@@ -101,3 +101,37 @@ def test_udl_tecnica_vs_simples():
 def test_udl_curtas_vs_detalhadas():
     assert "direto e conciso" in _describe_udl_format("simples", "curtas")
     assert "passo a passo" in _describe_udl_format("simples", "detalhadas")
+
+
+# --- Triagem de ritmo de estudo (RF novo) -------------------------------------
+
+def test_zpd_forca_suporte_maximo_quando_dificuldade_mesmo_com_nota_alta():
+    out = _describe_zpd_support(5, ritmo_estudo="dificuldade")
+    assert "bastante suporte" in out
+    assert "passos ainda menores" in out
+
+
+def test_zpd_sem_triagem_mantem_comportamento_normal():
+    assert "suporte mínimo" in _describe_zpd_support(5, ritmo_estudo="tranquilo")
+    assert "suporte mínimo" in _describe_zpd_support(5)
+
+
+def test_udl_forca_linguagem_simples_quando_dificuldade_mesmo_pedindo_tecnicas():
+    out = _describe_udl_format("técnicas", "detalhadas", ritmo_estudo="dificuldade")
+    assert "linguagem bem simples e concreta" in out
+    assert "não pressuponham acesso a livros" in out
+
+
+def test_udl_sem_triagem_respeita_estilo_pedido():
+    assert "linguagem técnica" in _describe_udl_format("técnicas", "detalhadas", ritmo_estudo="tranquilo")
+    assert "linguagem técnica" in _describe_udl_format("técnicas", "detalhadas")
+
+
+def test_build_page_messages_usa_ritmo_estudo_do_profile():
+    out = build_page_messages("x", _profile(ritmo_estudo="dificuldade", self_rating=5))
+    assert "passos ainda menores" in out[0]["content"]
+
+
+def test_build_page_messages_nunca_instrui_revelar_adaptacao():
+    out = build_page_messages("x", _profile())
+    assert "Nunca mencione ao aluno" in out[0]["content"]

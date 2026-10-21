@@ -315,7 +315,8 @@ def fetch_student_profile(
             client.table(table)
             .select(
                 "curso_periodo,contato_previo,interesses,interesses_estruturado,"
-                "estilo_preferido,detalhamento_preferido,autoavaliacao,updated_at"
+                "ritmo_estudo,estilo_preferido,detalhamento_preferido,autoavaliacao,"
+                "updated_at"
             )
             .eq("student_id", student_id)
             .limit(1)

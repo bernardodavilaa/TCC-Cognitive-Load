@@ -24,6 +24,7 @@ def build_interim_profile(
     self_rating,
     *,
     interesses_detalhe: Optional[str] = None,
+    ritmo_estudo: Optional[str] = None,
 ) -> dict:
     """Normaliza os campos do formulário de sala num dict de perfil.
 
@@ -52,4 +53,7 @@ def build_interim_profile(
     detalhe = (interesses_detalhe or "").strip()
     if detalhe:
         profile["hobbies_detail"] = detalhe
+    ritmo = (ritmo_estudo or "").strip()
+    if ritmo:
+        profile["ritmo_estudo"] = ritmo
     return profile

@@ -96,6 +96,23 @@ def test_upsert_e_fetch_interesses_estruturado(cfg, profile_student):
     assert profile["interesses_estruturado"] == estruturado
 
 
+def test_upsert_e_fetch_ritmo_estudo(cfg, profile_student):
+    student_id = profile_student
+
+    upsert_student_profile(
+        cfg.SUPABASE_URL,
+        cfg.SUPABASE_SERVICE_ROLE_KEY,
+        cfg.SUPABASE_PROFILE_TABLE,
+        student_id,
+        ritmo_estudo="dificuldade",
+    )
+
+    profile = fetch_student_profile(
+        cfg.SUPABASE_URL, cfg.SUPABASE_SERVICE_ROLE_KEY, cfg.SUPABASE_PROFILE_TABLE, student_id
+    )
+    assert profile["ritmo_estudo"] == "dificuldade"
+
+
 def test_fetch_perfil_inexistente(cfg):
     assert (
         fetch_student_profile(

@@ -467,6 +467,7 @@ def student_setup_from_class(selected_id, classrooms, subjects_by_class, current
             gr.update(value=1),
             [],
             *empty_detail_updates,
+            gr.update(value=None),
         )
 
     assunto = c.get("theme_name") or c.get("name") or ""
@@ -490,6 +491,7 @@ def student_setup_from_class(selected_id, classrooms, subjects_by_class, current
     curso_periodo = ""
     contato_previo = "não"
     autoavaliacao = 1
+    ritmo_estudo = None
 
     student_id = _auth_user_id(auth_state)
     if student_id:
@@ -506,6 +508,7 @@ def student_setup_from_class(selected_id, classrooms, subjects_by_class, current
             curso_periodo = profile.get("curso_periodo") or curso_periodo
             contato_previo = profile.get("contato_previo") or contato_previo
             autoavaliacao = profile.get("autoavaliacao") or autoavaliacao
+            ritmo_estudo = profile.get("ritmo_estudo") or ritmo_estudo
 
     chip_update, prev_valid, detail_updates = _interest_field_updates_from_structured(
         interesses_estruturado
@@ -526,6 +529,7 @@ def student_setup_from_class(selected_id, classrooms, subjects_by_class, current
         gr.update(value=autoavaliacao),
         prev_valid,
         *detail_updates,
+        gr.update(value=ritmo_estudo),
     )
 
 
@@ -1029,6 +1033,7 @@ def student_apply_setup(
     curso_periodo=None,
     study_participant=None,
     config_open_ts=None,
+    ritmo_estudo=None,
 ):
     details_by_theme = {
         "Esportes": interesse_detalhe_esportes,
@@ -1090,6 +1095,7 @@ def student_apply_setup(
         "profile": build_interim_profile(
             estilo, detalhamento, interesses, prior_experience, self_rating,
             interesses_detalhe=interesses_detalhe,
+            ritmo_estudo=ritmo_estudo,
         ),
         "subject": theme,
     }
@@ -1111,6 +1117,7 @@ def student_apply_setup(
                 estilo_preferido=(estilo or "").strip() or None,
                 detalhamento_preferido=(detalhamento or "").strip() or None,
                 autoavaliacao=int(self_rating) if self_rating not in (None, "") else None,
+                ritmo_estudo=(ritmo_estudo or "").strip() or None,
             )
         except Exception as exc:  # pragma: no cover - não deve bloquear o chat
             print(f"[PROFILE] Falha ao salvar perfil do aluno: {exc}")
@@ -2075,6 +2082,15 @@ def build_student_views(
                     value="não",
                     label="7) Você já teve contato com programação antes desta disciplina?",
                 )
+                stRitmoEstudo = gr.Radio(
+                    choices=[
+                        ("Tranquilo, acompanho bem", "tranquilo"),
+                        ("Às vezes me perco, preciso de mais tempo e exemplos simples", "dificuldade"),
+                        ("Prefiro não dizer", "nao_informado"),
+                    ],
+                    value=None,
+                    label="8) Como tem sido seu ritmo nesta disciplina até agora?",
+                )
                 # Pergunta de nível removida daqui por pedido explícito do
                 # autor (ficava duplicada com a etapa inicial, E2). O valor
                 # continua existindo e sendo usado -- só não é mais perguntado
@@ -2273,6 +2289,7 @@ def build_student_views(
             stSelfRating,
             stInteresseChipsPrev,
             *stInteresseDetalhes.values(),
+            stRitmoEstudo,
         ],
     )
 
@@ -2319,6 +2336,7 @@ def build_student_views(
             stCursoPeriodo,
             study_participant_state,
             config_open_ts_state,
+            stRitmoEstudo,
         ],
         outputs=[script_state, stCfgCol, stChatCol, page_profile_state,
                  study_session_state, stExerciseToggle, interesse_text_state,

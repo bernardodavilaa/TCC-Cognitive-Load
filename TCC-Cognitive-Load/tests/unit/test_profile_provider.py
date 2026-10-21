@@ -55,3 +55,15 @@ def test_hobbies_detail_presente_e_normalizado():
         interesses_detalhe="  jogo bola toda semana  ",
     )
     assert profile["hobbies_detail"] == "jogo bola toda semana"
+
+
+def test_ritmo_estudo_ausente_nao_aparece_no_dict():
+    profile = build_interim_profile("simples", "curtas", "", "sim", 3)
+    assert "ritmo_estudo" not in profile
+
+
+def test_ritmo_estudo_presente_e_normalizado():
+    profile = build_interim_profile(
+        "simples", "curtas", "", "sim", 3, ritmo_estudo="  dificuldade  ",
+    )
+    assert profile["ritmo_estudo"] == "dificuldade"
