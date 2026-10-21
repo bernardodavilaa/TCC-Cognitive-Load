@@ -440,7 +440,7 @@ def teacher_load_params(cls_id, classrooms):
         gr.update(value=float(adv.get("temperature", 0.7))),
         gr.update(value=float(adv.get("top_p", 0.95))),
         gr.update(value=int(adv.get("top_k", 40))),
-        gr.update(value=int(adv.get("max_tokens", 2048))),
+        gr.update(value=int(adv.get("max_tokens", 4096))),
         gr.update(value=script.get("estilo", "simples")),
         gr.update(value=script.get("detalhamento", "detalhadas")),
         gr.update(value=script.get("extras", "")),
@@ -1439,7 +1439,7 @@ def build_teacher_view(
                 tTopP = gr.Slider(0.0, 1.0, value=0.95, step=0.01, label="top_p")
             with gr.Row():
                 tTopK = gr.Slider(1, 100, value=40, step=1, label="top_k")
-                tMaxT = gr.Slider(128, 4096, value=2048, step=64, label="max_tokens")
+                tMaxT = gr.Slider(128, 8192, value=4096, step=64, label="max_tokens")
             with gr.Row():
                 tEstilo = gr.Radio(choices=["técnicas", "simples"], value="simples", label="Estilo de linguagem")
                 tDetalhamento = gr.Radio(choices=["detalhadas", "curtas"], value="detalhadas", label="Nível de detalhamento")

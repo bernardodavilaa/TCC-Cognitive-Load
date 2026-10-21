@@ -82,7 +82,7 @@ def _streamFromVertex(messages, cfg, adv):
             "temperature": float(adv.get("temperature", 0.7)),
             "top_p": float(adv.get("top_p", 0.95)),
             "top_k": int(adv.get("top_k", 40)),
-            "max_output_tokens": int(adv.get("max_tokens", 2048)),
+            "max_output_tokens": int(adv.get("max_tokens", 4096)),
         }
     except Exception:
         gen_cfg = {}

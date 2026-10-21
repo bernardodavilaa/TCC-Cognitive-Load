@@ -33,6 +33,9 @@ def buildCustomScript(assunto, estilo, detalhamento, objetivo, extras, subtemas=
         "- Não invente fatos; se não souber, explique a limitação e proponha passos para descobrir.",
         "- Mencione suposições quando necessário.",
         "- Use exemplos quando isso ajudar a clarear.",
+        "- Seja completo mas direto: não enrole nem repita a mesma ideia de formas "
+        "diferentes. Prefira terminar o raciocínio atual antes de abrir um novo "
+        "tópico, em vez de deixar uma explicação pela metade.",
     ]
     if detalhamento == "detalhadas":
         lines.append(

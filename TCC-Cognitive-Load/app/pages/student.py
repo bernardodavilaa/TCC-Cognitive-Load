@@ -466,7 +466,7 @@ def student_setup_from_class(selected_id, classrooms, subjects_by_class, current
         "temperature": float(adv.get("temperature", 0.7)),
         "top_p": float(adv.get("top_p", 0.95)),
         "top_k": int(adv.get("top_k", 40)),
-        "max_tokens": int(adv.get("max_tokens", 2048)),
+        "max_tokens": int(adv.get("max_tokens", 4096)),
     }
 
     # Defaults da sala (config. do professor); o perfil persistido do aluno,
@@ -1929,12 +1929,18 @@ def build_student_views(
                     value="não",
                     label="7) Você já teve contato com programação antes desta disciplina?",
                 )
+                # Pergunta de nível removida daqui por pedido explícito do
+                # autor (ficava duplicada com a etapa inicial, E2). O valor
+                # continua existindo e sendo usado -- só não é mais perguntado
+                # de novo aqui: carrega automaticamente a resposta da etapa
+                # inicial (ver student_submit_study_intro) ou do perfil salvo.
                 stSelfRating = gr.Slider(
                     1,
                     5,
                     value=1,
                     step=1,
-                    label="8) Como você avalia seu nível atual no conteúdo de hoje? (1 = nunca vi isso antes; 5 = já tenho boa base)",
+                    label="Nível atual no conteúdo de hoje",
+                    visible=False,
                 )
                 gr.Markdown(
                     "_Correlacione com um assunto que você conhece para aprender melhor!_")
