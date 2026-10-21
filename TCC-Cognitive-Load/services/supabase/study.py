@@ -741,13 +741,25 @@ def compute_participation(url: str, key: str, participant_id: str, config: Dict[
     peso_duvidas = float(config.get("peso_duvidas", 0.20))
     peso_exercicios = float(config.get("peso_exercicios", 0.30))
     peso_questionario = float(config.get("peso_questionario", 0.20))
+
+    # Metas podem ser 0 (ex.: meta_exercicios=0 como mitigação enquanto o
+    # modo exercício está indisponível) -- trata como "item satisfeito" e
+    # redistribui o peso proporcionalmente entre os itens restantes, em vez
+    # de dividir por zero.
+    itens = [
+        (meta_sessoes, min(n_sessoes_validas / meta_sessoes, 1.0) if meta_sessoes else 1.0, peso_sessoes),
+        (meta_duvidas, min(duvidas_validas / meta_duvidas, 1.0) if meta_duvidas else 1.0, peso_duvidas),
+        (meta_exercicios, min(exercicios_concluidos / meta_exercicios, 1.0) if meta_exercicios else 1.0, peso_exercicios),
+        (1, 1.0 if questionario_enviado else 0.0, peso_questionario),
+    ]
+    peso_ativo_total = sum(peso for meta, _frac, peso in itens if meta)
+    peso_zerado_total = sum(peso for meta, _frac, peso in itens if not meta)
     progresso_pct = round(
         100
-        * (
-            peso_sessoes * min(n_sessoes_validas / meta_sessoes, 1.0)
-            + peso_duvidas * min(duvidas_validas / meta_duvidas, 1.0)
-            + peso_exercicios * min(exercicios_concluidos / meta_exercicios, 1.0)
-            + peso_questionario * (1.0 if questionario_enviado else 0.0)
+        * sum(
+            (peso + (peso / peso_ativo_total * peso_zerado_total if meta and peso_ativo_total else 0)) * frac
+            for meta, frac, peso in itens
+            if meta
         ),
         1,
     )

@@ -997,6 +997,10 @@ def student_apply_setup(
     # RF-B1 (aprox.): abre/reaproveita a sessão do estudo quando a sala é do
     # Modo Estudo. O grupo efetivo vem da alocação do aluno (RF-A6).
     study_session: Dict[str, Any] = {}
+    # Plano B (mitigação do modo exercício, ver KNOWN ISSUE em
+    # student_toggle_exercise): se a sala está configurada com
+    # meta_exercicios=0, esconde o botão pra ninguém clicar nele e travar.
+    exercise_btn_update = gr.update(visible=False)
     if study_participant and (classroom or {}).get("study_mode"):
         effective_group = "experimental" if page_enabled else "controle"
         try:
@@ -1024,6 +1028,9 @@ def student_apply_setup(
             study_session = dict(study_session)
             study_session["classroom_id"] = cid
             study_session["effective_group"] = effective_group
+            config = fetch_latest_study_config(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, cid) or {}
+            if int(config.get("meta_exercicios", 1)) > 0:
+                exercise_btn_update = gr.update(visible=True)
         except Exception as exc:  # pragma: no cover - não deve bloquear o chat
             print(f"[STUDY] Falha ao iniciar sessão do estudo: {exc}")
             study_session = {}
@@ -1034,6 +1041,7 @@ def student_apply_setup(
         gr.update(visible=True),
         page_context,
         study_session,
+        exercise_btn_update,
     )
 
 
@@ -1764,14 +1772,15 @@ def build_student_views(
                 "perguntas rápidas (uma vez só). Depois disso, o card da sala mostra sua "
                 "participação, no estilo checklist:\n"
                 "- ✅/⬜ **Sessões** — conversar por tempo suficiente numa sessão e "
-                "responder à avaliação ao final conta 1 sessão (peso 30% da barra).\n"
+                "responder à avaliação ao final conta 1 sessão.\n"
                 "- ✅/⬜ **Dúvidas teóricas** — cada pergunta substantiva (fora do modo "
-                "exercício) conta 1 dúvida; repetir a mesma pergunta não conta de novo "
-                "(peso 20%).\n"
-                "- ✅/⬜ **Exercícios concluídos** — ligue \"📝 Estou resolvendo um "
-                "exercício\" antes de começar e marque \"Concluí\" ao final (peso 30%).\n"
-                "- ✅/⬜ **Questionário final** — libera depois de algumas sessões válidas "
-                "(peso 20%).\n\n"
+                "exercício) conta 1 dúvida; repetir a mesma pergunta não conta de novo.\n"
+                "- ✅/⬜ **Exercícios concluídos** — quando disponível na sala, ligue "
+                "\"📝 Estou resolvendo um exercício\" antes de começar e marque "
+                "\"Concluí\" ao final.\n"
+                "- ✅/⬜ **Questionário final** — libera depois de algumas sessões válidas.\n\n"
+                "O peso de cada item na barra pode variar um pouco de sala pra sala "
+                "(o card da sala mostra o percentual certo pra você).\n\n"
                 "Atingir a meta completa de participação vale pontos extras na disciplina "
                 "— o valor é definido pelo professor, não pela sua nota na avaliação."
             )
@@ -1922,7 +1931,7 @@ def build_student_views(
                     label="Chat (Sala)", type="messages", height=420)
                 #with gr.Row():
                 #    stClear = gr.Button("Limpar chat")
-                stExerciseToggle = gr.Button("📝 Estou resolvendo um exercício")
+                stExerciseToggle = gr.Button("📝 Estou resolvendo um exercício", visible=False)
                 stExerciseOutcome = gr.Radio(
                     choices=["Concluí", "Desisti", "Continuar"],
                     value=None,
@@ -2125,7 +2134,7 @@ def build_student_views(
             stCursoPeriodo,
             study_participant_state,
         ],
-        outputs=[script_state, stCfgCol, stChatCol, page_profile_state, study_session_state],
+        outputs=[script_state, stCfgCol, stChatCol, page_profile_state, study_session_state, stExerciseToggle],
     )
 
     stChatInput.submit(

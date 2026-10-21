@@ -208,6 +208,52 @@ def test_progress_bar_math_matches_acceptance_criterion_10(cfg, entities, alloca
         entities.sb.table(cfg.SUPABASE_EVALUATIONS_TABLE).delete().eq("id", row["id"]).execute()
 
 
+def test_progress_bar_with_meta_exercicios_zero_does_not_divide_by_zero(cfg, entities, allocated_participant):
+    """Plano B (mitigação do modo exercício): meta_exercicios=0 não pode
+    quebrar a barra, e o peso dos exercícios deve ser redistribuído
+    proporcionalmente entre sessões/dúvidas/questionário (30/20/30/20 vira
+    ~43/29/0/29, conforme a revisão pediu)."""
+    classroom_id, participant = allocated_participant
+    config_zero_ex = dict(DEFAULT_CONFIG, meta_exercicios=0)
+
+    for _ in range(3):
+        session = _make_session(cfg, classroom_id, participant)
+        close_study_session(
+            cfg.SUPABASE_URL, cfg.SUPABASE_SERVICE_ROLE_KEY, session["id"], end_reason="manual", is_valid=True
+        )
+        create_session_evaluation(
+            cfg.SUPABASE_URL, cfg.SUPABASE_SERVICE_ROLE_KEY, cfg.SUPABASE_EVALUATIONS_TABLE,
+            chat_id=None, student_id=participant["student_id"], classroom_id=classroom_id,
+            page_enabled=False, paas_score=5, utilidade=4, exemplos=4, qualidade=4, nps=4,
+        )
+        mark_session_evaluation_done(cfg.SUPABASE_URL, cfg.SUPABASE_SERVICE_ROLE_KEY, session["id"])
+
+    for i in range(3):
+        log_study_event(
+            cfg.SUPABASE_URL, cfg.SUPABASE_SERVICE_ROLE_KEY,
+            participant_id=participant["id"], classroom_id=classroom_id,
+            effective_group=participant["group_name"], event_type="message",
+            message_category="teorica", meta={"text_normalized": f"duvida zero ex {i}"},
+        )
+
+    # não deve levantar ZeroDivisionError
+    stats = compute_participation(cfg.SUPABASE_URL, cfg.SUPABASE_SERVICE_ROLE_KEY, participant["id"], config_zero_ex)
+    assert stats["exercicios_concluidos"] == 0
+    # sessões 3/3=100% (peso efetivo ~43), dúvidas 3/6=50% (peso efetivo ~29),
+    # questionário 0% (peso efetivo ~29) -> 43*1.0 + 29*0.5 + 29*0 = 57.5
+    assert stats["progresso_pct"] == pytest.approx(57.5, abs=0.5)
+    # meta 0 -> exercícios não bloqueiam "Completo" (0 >= 0)
+    # (sessões/dúvidas/questionário ainda faltam aqui, então não fica completo,
+    # mas o importante é não quebrar e não exigir exercícios)
+
+    rows = (
+        entities.sb.table(cfg.SUPABASE_EVALUATIONS_TABLE).select("id")
+        .eq("student_id", participant["student_id"]).execute().data
+    )
+    for row in rows:
+        entities.sb.table(cfg.SUPABASE_EVALUATIONS_TABLE).delete().eq("id", row["id"]).execute()
+
+
 def test_duplicate_message_text_counts_once(cfg, entities, allocated_participant):
     """RN-3: mensagem repetida não conta de novo como dúvida nova."""
     classroom_id, participant = allocated_participant
