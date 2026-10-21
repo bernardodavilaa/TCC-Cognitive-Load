@@ -61,26 +61,31 @@ def build_auth_views(*, blocks: gr.Blocks, vertex_cfg: Dict[str, Any], vertex_er
     """Create header, login and shared home sections."""
     header_msg = "### 👋 Bem-vindo! Faça login para continuar."
     # Mensagem de boas-vindas / instruções para os participantes da pesquisa.
-    # TODO(Bernardo): ainda falta preencher [PRAZO], [LINK_QUESTIONARIO]
-    # (questionário pós-sessão) e [CONTATO] com os dados reais.
+    # TODO(Bernardo): ainda falta o [LINK_QUESTIONARIO] (formulário externo,
+    # redundante com o questionário final já implementado dentro do app).
     aviso_msg = """# Bem-vindo(a) à pesquisa do TCC!
 
                 Este é o tutor de programação com IA personalizada, desenvolvido como parte
                 do meu Trabalho de Conclusão de Curso na PUC Minas. Muito obrigado por
                 participar!
 
+                **Como entrar:** use o **e-mail institucional PUC** que você preencheu no
+                formulário de pré-cadastro como usuário (ex.: `joaosilva@sga.pucminas.br` ou
+                `1234567@pucminas.edu.br`) e sua **matrícula** como senha.
+
                 **Ainda não fez o pré-cadastro?** Preencha aqui antes de tentar entrar:
                 "https://docs.google.com/forms/d/e/1FAIpQLScU8xUbqZPDLqPbpwhat3zF3ukb7j83MQTVox6m1m8vPyVtiQ/viewform"
+                — depois de preencher, me avise pelo contato abaixo que eu libero seu acesso.
 
-                **Como entrar:** se você já fez o pré-cadastro, use seu **e-mail institucional
-                PUC** como usuário e sua **matrícula** como senha.
+                **Ao final de cada sessão**, você será convidado a avaliar sua experiência
+                dentro do próprio app. Depois de algumas sessões, um questionário final mais
+                completo também abre automaticamente. Também respondemos pelo formulário
+                externo, se preferir: "[LINK_QUESTIONARIO]"
 
-                **Ao final da sua sessão**, responda ao questionário de avaliação:
-                "[LINK_QUESTIONARIO]"
+                **Prazo para participação:** até 06/11/2026.
 
-                **Prazo para participação:** até [PRAZO].
-
-                Dúvidas? Fale comigo: [CONTATO]
+                Dúvidas ou problema pra entrar? Fale comigo: **(31) 98689-2209** (WhatsApp) —
+                Bernardo D'Ávila
 
                 ---
                 **— Bernardo D'Ávila Rodrigues Bartholomeu**
@@ -97,14 +102,21 @@ def build_auth_views(*, blocks: gr.Blocks, vertex_cfg: Dict[str, Any], vertex_er
     aviso = gr.Markdown(aviso_msg, elem_id="hdr")
 
     with gr.Column(visible=True) as viewLogin:
-        gr.Markdown("## 🔐 Login / Registro")
-        authMode = gr.Radio(["Login", "Registrar"], value="Login", label="Modo de acesso")
+        gr.Markdown("## 🔐 Login")
+        # Cadastro público desativado: alunos entram só pelo pré-cadastro
+        # (Forms -> importação). authMode fica fixo em "Login" e escondido;
+        # o fluxo de Registrar continua implementado (doRegister/switch_auth_mode)
+        # mas sem UI pra acioná-lo, caso precise reativar no futuro.
+        authMode = gr.Radio(["Login"], value="Login", label="Modo de acesso", visible=False)
         loginHint = gr.Markdown(
-            "💡 **Alunos pré-cadastrados**: use seu e-mail institucional PUC como "
-            "usuário e o número da sua matrícula como senha."
+            "💡 Use o **e-mail institucional PUC** preenchido no formulário de "
+            "pré-cadastro como usuário (ex.: `joaosilva@sga.pucminas.br`) e sua "
+            "**matrícula** como senha. Não fez o pré-cadastro ainda? Preencha o "
+            "formulário acima e depois me avise pelo contato informado — sem "
+            "cadastro público direto por aqui."
         )
         with gr.Row():
-            username = gr.Textbox(label="Usuário", placeholder="ex: augusto")
+            username = gr.Textbox(label="Usuário", placeholder="ex: joaosilva@sga.pucminas.br")
             password = gr.Textbox(label="Senha", type="password", placeholder="••••••••")
             confirmPassword = gr.Textbox(
                 label="Confirmar senha",
