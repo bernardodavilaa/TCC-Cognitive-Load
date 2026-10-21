@@ -26,6 +26,7 @@ from services.supabase_client import (
     create_session_evaluation,
     create_study_config,
     download_file_from_bucket,
+    end_exercise,
     fetch_final_questionnaire,
     fetch_latest_study_config,
     fetch_open_session,
@@ -37,6 +38,7 @@ from services.supabase_client import (
     list_student_chats,
     log_study_event,
     mark_session_evaluation_done,
+    start_exercise,
     start_study_session,
     submit_final_questionnaire,
     touch_session_activity,
@@ -464,7 +466,7 @@ def student_setup_from_class(selected_id, classrooms, subjects_by_class, current
         "temperature": float(adv.get("temperature", 0.7)),
         "top_p": float(adv.get("top_p", 0.95)),
         "top_k": int(adv.get("top_k", 40)),
-        "max_tokens": int(adv.get("max_tokens", 1024)),
+        "max_tokens": int(adv.get("max_tokens", 2048)),
     }
 
     # Defaults da sala (config. do professor); o perfil persistido do aluno,
@@ -851,7 +853,7 @@ def student_submit_study_intro(auth, cid, classrooms, subjects_by_class, e1, e2,
     config/blocos do estudo sob demanda na primeira vez) e libera o chat."""
     c = _get_class_by_id(classrooms, cid)
     if not c:
-        return gr.update(), gr.update(), gr.update(), gr.update(), {}, "Warning: Sala não encontrada."
+        return gr.update(), gr.update(), gr.update(), gr.update(), {}, "Warning: Sala não encontrada.", gr.update(), gr.update()
     if not e1 or not e2 or not e3:
         return (
             gr.update(visible=True),
@@ -860,11 +862,13 @@ def student_submit_study_intro(auth, cid, classrooms, subjects_by_class, e1, e2,
             gr.update(),
             {},
             "Warning: Responda as três perguntas pra continuar.",
+            gr.update(),
+            gr.update(),
         )
 
     student_id = _auth_user_id(auth)
     if not student_id:
-        return gr.update(), gr.update(), gr.update(), gr.update(), {}, "Warning: Faça login."
+        return gr.update(), gr.update(), gr.update(), gr.update(), {}, "Warning: Faça login.", gr.update(), gr.update()
 
     try:
         config = fetch_latest_study_config(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, cid)
@@ -896,6 +900,8 @@ def student_submit_study_intro(auth, cid, classrooms, subjects_by_class, e1, e2,
             gr.update(),
             {},
             "Warning: Configure SUPABASE_URL e SUPABASE_SERVICE_ROLE_KEY.",
+            gr.update(),
+            gr.update(),
         )
     except SupabaseOperationError as err:
         return (
@@ -905,9 +911,17 @@ def student_submit_study_intro(auth, cid, classrooms, subjects_by_class, e1, e2,
             gr.update(),
             {},
             f"Warning: Não foi possível iniciar agora, tente novamente. ({err})",
+            gr.update(),
+            gr.update(),
         )
 
     theme_update, subs_update = _reveal_setup_updates(c, cid, subjects_by_class)
+    # RF-A0.3: a etapa inicial já perguntou contato prévio (E1) e nível (E2)
+    # -- pré-preenche em vez de perguntar de novo do zero na config da sala
+    # (o aluno ainda pode ajustar; é só pra não parecer repetido).
+    e1_to_prior = {"não": "não", "um pouco": "um pouco", "sim": "sim"}
+    prior_update = gr.update(value=e1_to_prior.get((e1 or "").strip().lower(), "não"))
+    self_rating_update = gr.update(value=int(e2))
     return (
         gr.update(visible=False),
         gr.update(visible=True),
@@ -915,6 +929,8 @@ def student_submit_study_intro(auth, cid, classrooms, subjects_by_class, e1, e2,
         subs_update,
         participant,
         "",
+        prior_update,
+        self_rating_update,
     )
 
 
@@ -1929,9 +1945,28 @@ def build_student_views(
                     "**Chat da Sala** — usa seu tema, subtemas e interesses.")
                 stChatbot = gr.Chatbot(
                     label="Chat (Sala)", type="messages", height=420)
+                allow_file_upload = bool(VERTEX_CFG and not _vertex_err)
+                chat_placeholder = (
+                    "Digite sua mensagem ou envie um PDF..."
+                    if allow_file_upload
+                    else "Digite sua mensagem..."
+                )
+                chat_sources = ["upload"] if allow_file_upload else []
+
+                # Caixa de mensagem logo abaixo do chat (não embaixo dos
+                # botões de ação) — é o que o aluno usa o tempo todo.
+                stChatInput = gr.MultimodalTextbox(
+                    show_label=False,
+                    placeholder=chat_placeholder,
+                    sources=chat_sources,
+                    interactive=True,
+                )
                 #with gr.Row():
                 #    stClear = gr.Button("Limpar chat")
-                stExerciseToggle = gr.Button("📝 Estou resolvendo um exercício", visible=False)
+                with gr.Row():
+                    stExerciseToggle = gr.Button("📝 Estou resolvendo um exercício", visible=False)
+                    #stBackToSetup = gr.Button("⬅️ Voltar para configuração da sala")
+                    stEndChat = gr.Button("Encerrar Chat", variant="stop")
                 stExerciseOutcome = gr.Radio(
                     choices=["Concluí", "Desisti", "Continuar"],
                     value=None,
@@ -1945,23 +1980,6 @@ def build_student_views(
                 )
                 stExerciseConfirm = gr.Button("Confirmar", visible=False)
                 stExerciseMsg = gr.Markdown("")
-                with gr.Row():
-                    #stBackToSetup = gr.Button("⬅️ Voltar para configuração da sala")
-                    stEndChat = gr.Button("Encerrar Chat", variant="stop")
-                allow_file_upload = bool(VERTEX_CFG and not _vertex_err)
-                chat_placeholder = (
-                    "Digite sua mensagem ou envie um PDF..."
-                    if allow_file_upload
-                    else "Digite sua mensagem..."
-                )
-                chat_sources = ["upload"] if allow_file_upload else []
-
-                stChatInput = gr.MultimodalTextbox(
-                    show_label=False,
-                    placeholder=chat_placeholder,
-                    sources=chat_sources,
-                    interactive=True,
-                )
 
     with gr.Column(visible=False) as viewStudentEvaluation:
         gr.Markdown("## 📝 Avalie sua experiência")
@@ -1989,10 +2007,6 @@ def build_student_views(
         )
         evalComentario = gr.Textbox(
             label="Comentário (opcional)", lines=2, placeholder="O que você achou?"
-        )
-        gr.Markdown(
-            "Também responda ao [questionário completo](\"[LINK_QUESTIONARIO]\") "
-            "— ajuda ainda mais na pesquisa!"
         )
         btnSubmitEval = gr.Button("Enviar avaliação", variant="primary")
         evalMsg = gr.Markdown("")
@@ -2113,7 +2127,7 @@ def build_student_views(
         inputs=[auth_state, student_selected_class, classrooms_state,
                 subjects_state, siE1, siE2, siE3],
         outputs=[viewStudyIntro, viewStudentSetup, stAssunto, stSubthemes,
-                 study_participant_state, studyIntroMsg],
+                 study_participant_state, studyIntroMsg, stPriorExperience, stSelfRating],
     )
 
     stSubmit.click(

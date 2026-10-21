@@ -61,8 +61,6 @@ def build_auth_views(*, blocks: gr.Blocks, vertex_cfg: Dict[str, Any], vertex_er
     """Create header, login and shared home sections."""
     header_msg = "### 👋 Bem-vindo! Faça login para continuar."
     # Mensagem de boas-vindas / instruções para os participantes da pesquisa.
-    # TODO(Bernardo): ainda falta o [LINK_QUESTIONARIO] (formulário externo,
-    # redundante com o questionário final já implementado dentro do app).
     aviso_msg = """# Bem-vindo(a) à pesquisa do TCC!
 
                 Este é o tutor de programação com IA personalizada, desenvolvido como parte
@@ -78,9 +76,9 @@ def build_auth_views(*, blocks: gr.Blocks, vertex_cfg: Dict[str, Any], vertex_er
                 — depois de preencher, me avise pelo contato abaixo que eu libero seu acesso.
 
                 **Ao final de cada sessão**, você será convidado a avaliar sua experiência
-                dentro do próprio app. Depois de algumas sessões, um questionário final mais
-                completo também abre automaticamente. Também respondemos pelo formulário
-                externo, se preferir: "[LINK_QUESTIONARIO]"
+                dentro do próprio app — é rápido e obrigatório pra sua participação contar.
+                Depois de algumas sessões, um questionário final mais completo também abre
+                automaticamente, também dentro do app.
 
                 **Prazo para participação:** até 06/11/2026.
 
