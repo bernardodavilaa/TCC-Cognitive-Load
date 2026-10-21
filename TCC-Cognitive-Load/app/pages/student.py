@@ -1686,6 +1686,30 @@ def build_student_views(
 
     with gr.Column(visible=False) as viewStudentRooms:
         gr.Markdown("## 🎒 Minhas Salas")
+        with gr.Accordion("ℹ️ Como usar a plataforma", open=False):
+            gr.Markdown(
+                "**Passo a passo:**\n"
+                "1. Escolha uma sala na lista abaixo.\n"
+                "2. Clique em **💬 Entrar no chat da sala** e preencha a configuração "
+                "(estilo, interesses, objetivo) — isso ajuda o tutor a explicar do seu jeito.\n"
+                "3. Converse livremente: tire dúvidas ou envie uma lista de exercícios em "
+                "PDF e resolva junto com o tutor (ele guia, não entrega a resposta pronta).\n"
+                "4. Quando terminar, clique em **Encerrar Chat** e responda à avaliação rápida.\n\n"
+                "**Em salas do Modo Estudo**, antes do primeiro acesso você responde 3 "
+                "perguntas rápidas (uma vez só). Depois disso, o card da sala mostra sua "
+                "participação, no estilo checklist:\n"
+                "- ✅/⬜ **Sessões** — conversar por tempo suficiente numa sessão e "
+                "responder à avaliação ao final conta 1 sessão (peso 30% da barra).\n"
+                "- ✅/⬜ **Dúvidas teóricas** — cada pergunta substantiva (fora do modo "
+                "exercício) conta 1 dúvida; repetir a mesma pergunta não conta de novo "
+                "(peso 20%).\n"
+                "- ✅/⬜ **Exercícios concluídos** — ligue \"📝 Estou resolvendo um "
+                "exercício\" antes de começar e marque \"Concluí\" ao final (peso 30%).\n"
+                "- ✅/⬜ **Questionário final** — libera depois de algumas sessões válidas "
+                "(peso 20%).\n\n"
+                "Atingir a meta completa de participação vale pontos extras na disciplina "
+                "— o valor é definido pelo professor, não pela sua nota na avaliação."
+            )
         with gr.Row():
             stRoomSelect = gr.Dropdown(
                 choices=[], label="Selecione uma sala", value=None, allow_custom_value=True)
