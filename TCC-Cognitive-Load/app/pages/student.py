@@ -19,6 +19,7 @@ from services.supabase_client import (
     SupabaseOperationError,
     allocate_participant,
     classify_message,
+    close_abandoned_sessions,
     close_study_session,
     compute_participation,
     create_chat_record,
@@ -750,7 +751,10 @@ def student_go_setup(auth, cid, classrooms, subjects_by_class):
     """Roteia pra configuração da sala — ou, se a sala é do Modo Estudo
     (RF-A0.1) e o aluno ainda não tem alocação, pra etapa inicial primeiro.
     Alocação já feita nunca refaz a etapa inicial (RF-A4/RF-A0.1: "não pode
-    ser refeita")."""
+    ser refeita"). RF-B3 (mínimo): antes de liberar um novo chat, fecha
+    sessões abandonadas (aba fechada sem Encerrar Chat) e, se sobrar
+    avaliação pendente, mostra ela primeiro -- "antes de abrir qualquer
+    novo chat"."""
     c = _get_class_by_id(classrooms, cid)
     if not c:
         return (
@@ -760,6 +764,8 @@ def student_go_setup(auth, cid, classrooms, subjects_by_class):
             gr.update(value=""),
             gr.update(choices=[]),
             {},
+            gr.update(),
+            gr.update(),
         )
 
     if c.get("study_mode"):
@@ -779,7 +785,42 @@ def student_go_setup(auth, cid, classrooms, subjects_by_class):
                 gr.update(),
                 gr.update(),
                 {},
+                gr.update(),
+                gr.update(),
             )
+
+        try:
+            config = fetch_latest_study_config(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, cid) or {}
+            close_abandoned_sessions(
+                SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY,
+                participant_id=participant["id"], config=config,
+            )
+            pending = fetch_pending_evaluation_session(
+                SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, participant["id"]
+            )
+        except Exception as exc:
+            print(f"[STUDY] Falha ao checar sessões abandonadas: {exc}")
+            pending = None
+
+        if pending:
+            chat_context = {
+                "chat_id": pending.get("chat_id"),
+                "classroom_id": pending.get("classroom_id"),
+                "page_enabled": pending.get("effective_group") == "experimental",
+                "study_participant_id": participant["id"],
+                "study_session_id": pending["id"],
+            }
+            return (
+                gr.update(visible=False),
+                gr.update(visible=False),
+                gr.update(visible=False),
+                gr.update(),
+                gr.update(),
+                participant,
+                chat_context,
+                gr.update(visible=True),
+            )
+
         theme_update, subs_update = _reveal_setup_updates(c, cid, subjects_by_class)
         return (
             gr.update(visible=False),
@@ -788,6 +829,8 @@ def student_go_setup(auth, cid, classrooms, subjects_by_class):
             theme_update,
             subs_update,
             participant,
+            gr.update(),
+            gr.update(visible=False),
         )
 
     theme_update, subs_update = _reveal_setup_updates(c, cid, subjects_by_class)
@@ -798,6 +841,8 @@ def student_go_setup(auth, cid, classrooms, subjects_by_class):
         theme_update,
         subs_update,
         {},
+        gr.update(),
+        gr.update(visible=False),
     )
 
 
@@ -1074,22 +1119,34 @@ def _student_track_exercise_turn(chats_state, current_chat_id, study_exercise):
     return study_exercise
 
 
-def student_toggle_exercise(turned_on, study_participant, study_session, study_exercise):
-    """RF-B4: liga abre um registro de exercício; desliga pergunta se
-    concluiu/desistiu/quer continuar."""
+def student_toggle_exercise(study_participant, study_session, study_exercise):
+    """RF-B4: botão alterna estado pelo exercício aberto (não por um booleano
+    de Checkbox — Checkbox.change() não disparava de forma confiável neste
+    componente em testes automatizados; Button.click() é o padrão já usado
+    com sucesso em todo o resto do app). 1º clique (sem exercício aberto)
+    abre o registro; 2º clique (com exercício aberto) pergunta o desfecho.
+
+    KNOWN ISSUE (não resolvido): em testes locais via Playwright, o 1º
+    clique chama esta função (confirmado via log) com dados corretos, mas
+    `start_exercise(...)` nunca retorna nem levanta exceção dentro do
+    handler do Gradio -- apesar de a MESMA chamada, com os MESMOS IDs,
+    completar em ~2s quando feita fora do Gradio (script direto). Suspeita
+    não confirmada: contenção/deadlock no lock global `_client_lock` de
+    `services/supabase/common.py::_get_client`, que é compartilhado por
+    toda chamada Supabase do app. Até investigar com calma, trate a meta
+    de exercícios como opcional (`meta_exercicios=0` na config do estudo
+    real) para não bloquear a participação completa por essa funcionalidade."""
     if not study_participant or not (study_session or {}).get("id"):
         return (
             study_exercise or {},
-            gr.update(value=False),
+            gr.update(),
             gr.update(visible=False),
             gr.update(visible=False),
             gr.update(visible=False),
             "Warning: Modo exercício só funciona dentro de uma sala do Modo Estudo.",
         )
 
-    if turned_on:
-        if (study_exercise or {}).get("id"):
-            return study_exercise, gr.update(), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), ""
+    if not (study_exercise or {}).get("id"):
         try:
             new_exercise = start_exercise(
                 SUPABASE_URL,
@@ -1110,7 +1167,7 @@ def student_toggle_exercise(turned_on, study_participant, study_session, study_e
         except Exception as exc:
             return (
                 {},
-                gr.update(value=False),
+                gr.update(),
                 gr.update(visible=False),
                 gr.update(visible=False),
                 gr.update(visible=False),
@@ -1118,11 +1175,16 @@ def student_toggle_exercise(turned_on, study_participant, study_session, study_e
             )
         new_exercise = dict(new_exercise)
         new_exercise["message_count"] = 0
-        return new_exercise, gr.update(), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), ""
+        return (
+            new_exercise,
+            gr.update(value="⏹️ Encerrar exercício (concluí/desisti)"),
+            gr.update(visible=False),
+            gr.update(visible=False),
+            gr.update(visible=False),
+            "",
+        )
 
-    # desligou: se não havia exercício aberto, nada a fazer
-    if not (study_exercise or {}).get("id"):
-        return study_exercise or {}, gr.update(), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), ""
+    # exercício já aberto -> pergunta o desfecho
     return (
         study_exercise,
         gr.update(),
@@ -1136,11 +1198,14 @@ def student_toggle_exercise(turned_on, study_participant, study_session, study_e
 def student_confirm_exercise_outcome(outcome, reason, study_participant, study_session, study_exercise):
     """RN-4: só conta como concluído com >= EX_MIN_MSG_ALUNO mensagens do
     aluno dentro do exercício (parâmetro do study_config vigente)."""
+    btn_reset = gr.update(value="📝 Estou resolvendo um exercício")
+    btn_keep = gr.update(value="⏹️ Encerrar exercício (concluí/desisti)")
+
     if not (study_exercise or {}).get("id"):
-        return {}, gr.update(value=False), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), ""
+        return {}, btn_reset, gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), ""
 
     if outcome == "Continuar" or not outcome:
-        return study_exercise, gr.update(value=True), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), ""
+        return study_exercise, btn_keep, gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), ""
 
     status = "concluido" if outcome == "Concluí" else "desistiu"
     msg_count = int(study_exercise.get("message_count") or 0)
@@ -1175,7 +1240,7 @@ def student_confirm_exercise_outcome(outcome, reason, study_participant, study_s
     except Exception as exc:
         msg = f"Warning: Não foi possível registrar o exercício: {exc}"
 
-    return {}, gr.update(value=False), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), msg
+    return {}, btn_reset, gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), msg
 
 
 def _student_chat_back_to_setup():
@@ -1857,9 +1922,7 @@ def build_student_views(
                     label="Chat (Sala)", type="messages", height=420)
                 #with gr.Row():
                 #    stClear = gr.Button("Limpar chat")
-                stExerciseToggle = gr.Checkbox(
-                    value=False, label="📝 Estou resolvendo um exercício"
-                )
+                stExerciseToggle = gr.Button("📝 Estou resolvendo um exercício")
                 stExerciseOutcome = gr.Radio(
                     choices=["Concluí", "Desisti", "Continuar"],
                     value=None,
@@ -2032,7 +2095,8 @@ def build_student_views(
         inputs=[auth_state, student_selected_class,
                 classrooms_state, subjects_state],
         outputs=[viewStudentRooms, viewStudyIntro, viewStudentSetup, stAssunto,
-                 stSubthemes, study_participant_state],
+                 stSubthemes, study_participant_state, last_chat_context_state,
+                 viewStudentEvaluation],
     )
 
     btnStudySubmitIntro.click(
@@ -2086,9 +2150,9 @@ def build_student_views(
         outputs=study_exercise_state,
     ).then(_student_chat_enable, outputs=stChatInput)
 
-    stExerciseToggle.change(
+    stExerciseToggle.click(
         student_toggle_exercise,
-        inputs=[stExerciseToggle, study_participant_state, study_session_state, study_exercise_state],
+        inputs=[study_participant_state, study_session_state, study_exercise_state],
         outputs=[study_exercise_state, stExerciseToggle, stExerciseOutcome,
                  stExerciseReason, stExerciseConfirm, stExerciseMsg],
     )

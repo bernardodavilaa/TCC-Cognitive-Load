@@ -11,7 +11,7 @@ from __future__ import annotations
 import random
 import secrets
 import string
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from postgrest.exceptions import APIError
@@ -400,6 +400,7 @@ def touch_session_activity(
     payload: Dict[str, Any] = {
         "active_seconds": active_seconds,
         "student_message_count": student_message_count,
+        "last_activity_at": _now_iso(),
     }
     if had_fallback:
         payload["had_fallback"] = True
@@ -455,6 +456,82 @@ def mark_session_evaluation_done(url: str, key: str, session_id: str) -> None:
         raise _handle_api_error(err) from err
     except Exception as exc:
         raise SupabaseOperationError(str(exc)) from exc
+
+
+def close_abandoned_sessions(
+    url: str,
+    key: str,
+    *,
+    participant_id: str,
+    config: Dict[str, Any],
+    idle_minutes: int = 30,
+) -> List[Dict[str, Any]]:
+    """RF-B3 (versão mínima, sem gr.Timer): no próximo acesso do aluno,
+    fecha sessões abertas há mais de `idle_minutes` desde a última
+    atividade registrada (aba fechada sem "Encerrar Chat"). Usa a mesma
+    regra de validade de RN-2 a partir do que já foi acumulado em
+    active_seconds/student_message_count. Retorna as sessões fechadas
+    (para o chamador decidir se mostra avaliação pendente)."""
+    client = _get_client(url, key)
+    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=idle_minutes)).isoformat()
+    try:
+        resp = (
+            client.table("study_sessions")
+            .select("*")
+            .eq("participant_id", participant_id)
+            .is_("ended_at", "null")
+            .lt("last_activity_at", cutoff)
+            .execute()
+        )
+    except APIError as err:
+        raise _handle_api_error(err) from err
+    except Exception as exc:
+        raise SupabaseOperationError(str(exc)) from exc
+
+    min_active_s = int(config.get("sessao_min_ativo_min", 10)) * 60
+    min_msgs = int(config.get("sessao_min_msg_aluno", 6))
+    closed = []
+    for session in resp.data or []:
+        is_valid = (
+            int(session.get("active_seconds") or 0) >= min_active_s
+            and int(session.get("student_message_count") or 0) >= min_msgs
+        )
+        updated = close_study_session(
+            url, key, session["id"], end_reason="idle_timeout", is_valid=is_valid
+        )
+        closed.append(updated)
+    return closed
+
+
+def admin_validate_session(url: str, key: str, session_id: str, *, note: Optional[str] = None) -> Dict[str, Any]:
+    """Validação manual pelo admin (mitigação do risco de "ninguém perder
+    pontos por erro do sistema"): marca uma sessão como válida mesmo que a
+    atividade registrada não bata com os mínimos, por exemplo quando uma
+    falha técnica (não do aluno) interrompeu a sessão."""
+    client = _get_client(url, key)
+    try:
+        current = client.table("study_sessions").select("*").eq("id", session_id).limit(1).execute()
+        resp = client.table("study_sessions").update({"is_valid": True}).eq("id", session_id).execute()
+    except APIError as err:
+        raise _handle_api_error(err) from err
+    except Exception as exc:
+        raise SupabaseOperationError(str(exc)) from exc
+
+    row = (current.data or [{}])[0]
+    if row.get("participant_id") and row.get("classroom_id"):
+        try:
+            log_study_event(
+                url, key,
+                participant_id=row["participant_id"],
+                classroom_id=row["classroom_id"],
+                effective_group=row.get("effective_group", "controle"),
+                event_type="session_end",
+                session_id=session_id,
+                meta={"admin_manual_validation": True, "note": note},
+            )
+        except Exception:
+            pass
+    return (resp.data or [{"is_valid": True}])[0]
 
 
 def fetch_pending_evaluation_session(url: str, key: str, participant_id: str) -> Optional[Dict[str, Any]]:
@@ -826,6 +903,8 @@ __all__ = [
     "close_study_session",
     "mark_session_evaluation_done",
     "fetch_pending_evaluation_session",
+    "close_abandoned_sessions",
+    "admin_validate_session",
     "log_study_event",
     "start_exercise",
     "end_exercise",

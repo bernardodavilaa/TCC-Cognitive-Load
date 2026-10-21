@@ -11,6 +11,7 @@ import gradio as gr
 from services.supabase_client import (
     SupabaseConfigurationError,
     SupabaseOperationError,
+    admin_validate_session,
     create_classroom_record,
     create_subject_record,
     delete_classroom_record,
@@ -1099,6 +1100,22 @@ def _participants_overview_md(overview: List[Dict[str, Any]]) -> str:
     return header + "\n".join(lines)
 
 
+def researcher_validate_session(session_id, note, auth):
+    """Validação manual: cobre falhas técnicas (não do aluno) que
+    impediriam uma sessão de contar, pra ninguém perder pontos por erro
+    do sistema."""
+    if not _is_admin(auth):
+        return "⛔ Apenas o pesquisador/admin pode validar sessões."
+    session_id = (session_id or "").strip()
+    if not session_id:
+        return "Warning: Informe o id da sessão."
+    try:
+        admin_validate_session(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, session_id, note=(note or "").strip() or None)
+    except Exception as exc:
+        return f"ERROR: Não foi possível validar: {exc}"
+    return f"OK: Sessão {session_id} marcada como válida."
+
+
 def researcher_panel_refresh(cls_id, auth):
     if not _is_admin(auth):
         return "⛔ Apenas o pesquisador/admin pode acessar este painel.", "", ""
@@ -1207,6 +1224,16 @@ def build_admin_views(
             rpExportParticipants = gr.DownloadButton("⬇️ Exportar participantes (CSV)")
             rpExportCredit = gr.DownloadButton("⬇️ Exportar lista de crédito (CSV)")
         rpMsg = gr.Markdown("")
+        gr.Markdown(
+            "#### Validar sessão manualmente\n"
+            "Use quando uma falha técnica (não do aluno) impediu uma sessão de "
+            "bater os mínimos — ela conta como válida mesmo assim."
+        )
+        with gr.Row():
+            rpSessionId = gr.Textbox(label="ID da sessão (study_sessions.id)")
+            rpSessionNote = gr.Textbox(label="Motivo (opcional)")
+            rpValidateSession = gr.Button("✅ Validar sessão")
+        rpValidateMsg = gr.Markdown("")
         with gr.Row():
             adminPgBack = gr.Button("← Voltar à Home do Admin")
 
@@ -1400,6 +1427,12 @@ def build_admin_views(
         researcher_export_credit,
         inputs=[rpClassSelect, auth_state],
         outputs=rpExportCredit,
+    )
+
+    rpValidateSession.click(
+        researcher_validate_session,
+        inputs=[rpSessionId, rpSessionNote, auth_state],
+        outputs=rpValidateMsg,
     )
 
     btnAddClass.click(

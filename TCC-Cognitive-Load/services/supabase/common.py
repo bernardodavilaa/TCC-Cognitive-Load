@@ -12,8 +12,9 @@ from datetime import datetime, timezone
 import json, re
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
+import httpx
 from postgrest.exceptions import APIError
-from supabase import Client, create_client
+from supabase import Client, ClientOptions, create_client
 
 
 class SupabaseError(RuntimeError):
@@ -228,7 +229,22 @@ def _get_client(url: str, key: str) -> Client:
         signature = (url, key)
         if _cached_client is None or _client_signature != signature:
             try:
-                _cached_client = create_client(url, key)
+                # O cliente é um singleton reaproveitado pelo processo inteiro
+                # (horas, muitas requisições). Sob concorrência real (vários
+                # alunos ao mesmo tempo), algumas conexões keep-alive do pool
+                # ficam obsoletas (o servidor já fechou por timeout) e a
+                # PRÓXIMA requisição que tenta reaproveitá-las falha com
+                # "Server disconnected" -- confirmado num teste com 10
+                # alocações paralelas reais. Habilitar retry no transporte
+                # HTTP resolve: numa conexão obsoleta, tenta de novo com uma
+                # nova em vez de propagar o erro pro aluno.
+                httpx_client = httpx.Client(
+                    transport=httpx.HTTPTransport(retries=2),
+                    timeout=httpx.Timeout(120.0),
+                )
+                _cached_client = create_client(
+                    url, key, options=ClientOptions(httpx_client=httpx_client)
+                )
                 _client_signature = signature
             except Exception as exc:  # pragma: no cover - depende de rede/configuração real
                 raise SupabaseOperationError(
