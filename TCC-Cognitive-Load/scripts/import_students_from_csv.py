@@ -40,7 +40,7 @@ from services.supabase.common import (  # noqa: E402
 HEADER_MAP = {
     "Nome completo": "nome",
     "E-mail institucional PUC": "email",
-    "Matrícula": "matricula",
+    "Matrícula (Ex: 776775)": "matricula",
 }
 
 
