@@ -25,6 +25,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from app.config import (  # noqa: E402
+    SUPABASE_PROFILE_TABLE,
     SUPABASE_SERVICE_ROLE_KEY,
     SUPABASE_URL,
     SUPABASE_USERS_TABLE,
@@ -33,7 +34,9 @@ from services.auth_store import _hashPw  # noqa: E402
 from services.supabase.common import (  # noqa: E402
     SupabaseUserExistsError,
     create_user_record,
+    fetch_user_record,
 )
+from services.supabase.student import upsert_student_profile  # noqa: E402
 
 # Nomes das colunas no CSV exportado do Forms -> chave interna usada aqui.
 # Ajuste o lado esquerdo se o cabeçalho do seu Forms for diferente.
@@ -41,6 +44,7 @@ HEADER_MAP = {
     "Nome completo": "nome",
     "E-mail institucional PUC": "email",
     "Matrícula (Ex: 776775)": "matricula",
+    "Curso e período atual": "curso_periodo",
 }
 
 
@@ -59,6 +63,7 @@ def main(csv_path: str) -> None:
 
     created = 0
     already_existing = 0
+    curso_periodo_atualizado = 0
     errors = []
 
     with path.open(encoding="utf-8-sig", newline="") as f:
@@ -68,6 +73,7 @@ def main(csv_path: str) -> None:
             nome = row.get("nome", "")
             email = row.get("email", "").lower()
             matricula = row.get("matricula", "")
+            curso_periodo = row.get("curso_periodo", "")
 
             if not nome or not email or not matricula:
                 errors.append(f"linha {i}: nome/e-mail/matrícula ausente, pulando")
@@ -90,9 +96,29 @@ def main(csv_path: str) -> None:
                 already_existing += 1
             except Exception as exc:  # noqa: BLE001
                 errors.append(f"linha {i} ({email}): {exc}")
+                continue
+
+            # Curso/período vem do cadastro, nunca é perguntado de novo
+            # dentro do Modo Estudo -- grava aqui (idempotente: roda de novo
+            # sem problema, inclusive pra backfill de quem já existia).
+            if curso_periodo:
+                try:
+                    user = fetch_user_record(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_USERS_TABLE, email)
+                    if user and user.id:
+                        upsert_student_profile(
+                            SUPABASE_URL,
+                            SUPABASE_SERVICE_ROLE_KEY,
+                            SUPABASE_PROFILE_TABLE,
+                            user.id,
+                            curso_periodo=curso_periodo,
+                        )
+                        curso_periodo_atualizado += 1
+                except Exception as exc:  # noqa: BLE001
+                    errors.append(f"linha {i} ({email}): falha ao salvar curso/período ({exc})")
 
     print(f"Criados: {created}")
     print(f"Já cadastrados (pulados): {already_existing}")
+    print(f"Curso/período atualizado: {curso_periodo_atualizado}")
     if errors:
         print(f"Erros ({len(errors)}):")
         for err in errors:

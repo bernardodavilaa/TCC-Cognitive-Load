@@ -310,3 +310,34 @@ def test_duplicate_message_text_counts_once(cfg, entities, allocated_participant
         )
     stats = compute_participation(cfg.SUPABASE_URL, cfg.SUPABASE_SERVICE_ROLE_KEY, participant["id"], DEFAULT_CONFIG)
     assert stats["duvidas_validas"] == 1
+
+
+def test_self_rating_at_start_gravado_nos_dois_grupos(cfg, entities, allocated_participant):
+    """Retrato da autoavaliação no início da sessão -- log, não pergunta nova
+    (continua herdada da etapa inicial/perfil); gravado pros dois grupos."""
+    classroom_id, participant = allocated_participant
+
+    session = start_study_session(
+        cfg.SUPABASE_URL,
+        cfg.SUPABASE_SERVICE_ROLE_KEY,
+        participant_id=participant["id"],
+        classroom_id=classroom_id,
+        effective_group=participant["group_name"],
+        config_version=participant["config_version"],
+        self_rating=4,
+    )
+    assert session["self_rating_at_start"] == 4
+
+
+def test_self_rating_at_start_aceita_none(cfg, entities, allocated_participant):
+    classroom_id, participant = allocated_participant
+
+    session = start_study_session(
+        cfg.SUPABASE_URL,
+        cfg.SUPABASE_SERVICE_ROLE_KEY,
+        participant_id=participant["id"],
+        classroom_id=classroom_id,
+        effective_group=participant["group_name"],
+        config_version=participant["config_version"],
+    )
+    assert session["self_rating_at_start"] is None

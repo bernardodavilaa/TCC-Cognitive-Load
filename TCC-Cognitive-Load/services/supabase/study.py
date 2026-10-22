@@ -362,9 +362,15 @@ def start_study_session(
     classroom_id: str,
     effective_group: str,
     config_version: int,
+    self_rating: Optional[int] = None,
 ) -> Dict[str, Any]:
     """RF-B1: início na 1ª mensagem. Reaproveita sessão aberta se existir
-    (evita duplicar ao reenviar o formulário/recarregar a página)."""
+    (evita duplicar ao reenviar o formulário/recarregar a página).
+
+    `self_rating` é um retrato (log, não pergunta nova) da autoavaliação
+    vigente no momento em que a sessão começa -- gravado nos dois grupos,
+    mas só o experimental o usa na inferência de Bloom do PAGE.
+    """
     open_session = fetch_open_session(url, key, participant_id)
     if open_session:
         return open_session
@@ -374,6 +380,7 @@ def start_study_session(
         "classroom_id": classroom_id,
         "effective_group": effective_group,
         "config_version": config_version,
+        "self_rating_at_start": self_rating,
     }
     client = _get_client(url, key)
     try:

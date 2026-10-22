@@ -484,7 +484,11 @@ def student_setup_from_class(selected_id, classrooms, subjects_by_class, current
     }
 
     # Defaults da sala (config. do professor); o perfil persistido do aluno,
-    # quando existir, tem prioridade sobre estilo/detalhamento/interesses.
+    # quando existir, tem prioridade sobre estilo/detalhamento/interesses --
+    # mas SÓ pro grupo experimental dentro do Modo Estudo (RF novo: o
+    # controle configura manualmente a cada sessão, sem memória/pré-
+    # preenchimento, pra ser de fato o baseline "sem personalização
+    # persistida"; fora do Modo Estudo, não há distinção de grupo).
     estilo = script.get("estilo", "simples")
     detalhamento = script.get("detalhamento", "detalhadas")
     interesses_estruturado = []
@@ -493,7 +497,17 @@ def student_setup_from_class(selected_id, classrooms, subjects_by_class, current
     autoavaliacao = 1
     ritmo_estudo = None
 
+    is_study_mode = bool(c.get("study_mode"))
     student_id = _auth_user_id(auth_state)
+    group_name = None
+    if is_study_mode and student_id:
+        try:
+            participant = fetch_participant_by_student(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, student_id)
+            group_name = (participant or {}).get("group_name")
+        except Exception:
+            group_name = None
+    allow_personalization_prefill = (not is_study_mode) or (group_name == "experimental")
+
     if student_id:
         try:
             profile = fetch_student_profile(
@@ -502,17 +516,23 @@ def student_setup_from_class(selected_id, classrooms, subjects_by_class, current
         except Exception:
             profile = None
         if profile:
-            estilo = profile.get("estilo_preferido") or estilo
-            detalhamento = profile.get("detalhamento_preferido") or detalhamento
-            interesses_estruturado = profile.get("interesses_estruturado") or interesses_estruturado
+            # Contato prévio e curso/período nunca são repetidos, nos dois
+            # grupos: vêm da etapa inicial / do cadastro, só leitura.
             curso_periodo = profile.get("curso_periodo") or curso_periodo
             contato_previo = profile.get("contato_previo") or contato_previo
             autoavaliacao = profile.get("autoavaliacao") or autoavaliacao
-            ritmo_estudo = profile.get("ritmo_estudo") or ritmo_estudo
+            if allow_personalization_prefill:
+                estilo = profile.get("estilo_preferido") or estilo
+                detalhamento = profile.get("detalhamento_preferido") or detalhamento
+                interesses_estruturado = profile.get("interesses_estruturado") or interesses_estruturado
+                ritmo_estudo = profile.get("ritmo_estudo") or ritmo_estudo
 
     chip_update, prev_valid, detail_updates = _interest_field_updates_from_structured(
         interesses_estruturado
     )
+    # Travados (somente leitura) dentro do Modo Estudo, pros dois grupos --
+    # fora dele, continuam editáveis como sempre foram.
+    editable = not is_study_mode
     return (
         gr.update(value=assunto),
         gr.update(choices=st_choices, value=[]),
@@ -524,8 +544,8 @@ def student_setup_from_class(selected_id, classrooms, subjects_by_class, current
         gr.update(visible=False),
         new_adv,
         "OK: Parâmetros da sala aplicados.",
-        gr.update(value=curso_periodo),
-        gr.update(value=contato_previo),
+        gr.update(value=curso_periodo, interactive=editable),
+        gr.update(value=contato_previo, interactive=editable),
         gr.update(value=autoavaliacao),
         prev_valid,
         *detail_updates,
@@ -1142,6 +1162,7 @@ def student_apply_setup(
                 classroom_id=cid,
                 effective_group=effective_group,
                 config_version=study_participant.get("config_version"),
+                self_rating=int(self_rating) if self_rating not in (None, "") else None,
             )
             if not existing_open:
                 log_study_event(
