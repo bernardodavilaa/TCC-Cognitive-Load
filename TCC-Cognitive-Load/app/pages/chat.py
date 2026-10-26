@@ -163,7 +163,15 @@ def bot(history, docsState, scriptState, advState, currentChatId, chatsState, pa
                 history[-1]["content"] = ""
                 reformatted = ""
                 t1 = time.monotonic()
-                for delta in _streamFromVertex(page_messages, VERTEX_CFG, adv):
+                # A reformatação do PAGE tende a ficar mais longa que a base
+                # (ancora cada ponto numa referência concreta) -- com o
+                # max_tokens da sala, isso cortava respostas no meio (caso
+                # real: aluna real reportou "resposta truncada" 2x na mesma
+                # sessão). Nunca usa menos que 8192 só pra essa 2ª chamada,
+                # sem tocar no limite configurado pra base.
+                page_adv = dict(adv)
+                page_adv["max_tokens"] = max(int(adv.get("max_tokens", 4096)), 8192)
+                for delta in _streamFromVertex(page_messages, VERTEX_CFG, page_adv):
                     reformatted += delta
                     history[-1]["content"] = reformatted
                     yield history
