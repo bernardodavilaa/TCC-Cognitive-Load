@@ -238,11 +238,13 @@ def _free_port() -> int:
     return port
 
 
-def _fake_stream(messages, cfg, adv):
+def _fake_stream(messages, cfg, adv, finish_reason_holder=None):
     last_user = ""
     for m in messages:
         if (m.get("role") or "").lower() == "user":
             last_user = m.get("content") or ""
+    if finish_reason_holder is not None:
+        finish_reason_holder[:] = ["STOP"]
     yield f"[resposta simulada] recebi: {last_user}".strip()
 
 

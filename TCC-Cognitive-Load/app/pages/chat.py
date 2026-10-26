@@ -134,15 +134,19 @@ def bot(history, docsState, scriptState, advState, currentChatId, chatsState, pa
         "t_base_s": None,
         "t_page_s": None,
         "t_total_s": None,
+        "finish_reason_base": None,
+        "finish_reason_page": None,
     }
     t_start = time.monotonic()
 
     try:
         if not page_enabled:
-            for delta in _streamFromVertex(messages, VERTEX_CFG, adv):
+            finish_holder = []
+            for delta in _streamFromVertex(messages, VERTEX_CFG, adv, finish_reason_holder=finish_holder):
                 history[-1]["content"] += delta
                 yield history
             final_text = history[-1]["content"]
+            page_meta["finish_reason_base"] = finish_holder[0] if finish_holder else None
         else:
             # A chamada base é consumida de uma vez (sem yield por delta) pra
             # poder ser reformatada inteira pelo PAGE antes de chegar à UI --
@@ -151,8 +155,12 @@ def bot(history, docsState, scriptState, advState, currentChatId, chatsState, pa
             history[-1]["content"] = "⏳ Pensando numa explicação pra você..."
             yield history
             t0 = time.monotonic()
-            base_text = "".join(_streamFromVertex(messages, VERTEX_CFG, adv))
+            base_finish_holder = []
+            base_text = "".join(
+                _streamFromVertex(messages, VERTEX_CFG, adv, finish_reason_holder=base_finish_holder)
+            )
             page_meta["t_base_s"] = round(time.monotonic() - t0, 2)
+            page_meta["finish_reason_base"] = base_finish_holder[0] if base_finish_holder else None
             final_text = base_text
             try:
                 page_messages = build_page_messages(
@@ -165,17 +173,21 @@ def bot(history, docsState, scriptState, advState, currentChatId, chatsState, pa
                 t1 = time.monotonic()
                 # A reformatação do PAGE tende a ficar mais longa que a base
                 # (ancora cada ponto numa referência concreta) -- com o
-                # max_tokens da sala, isso cortava respostas no meio (caso
-                # real: aluna real reportou "resposta truncada" 2x na mesma
-                # sessão). Nunca usa menos que 8192 só pra essa 2ª chamada,
-                # sem tocar no limite configurado pra base.
+                # max_tokens da sala, isso cortava respostas no meio (achado
+                # real: aluna real reportou corte em 2 sessões diferentes).
+                # Nunca usa menos que 8192 só pra essa 2ª chamada, sem tocar
+                # no limite configurado pra base.
                 page_adv = dict(adv)
                 page_adv["max_tokens"] = max(int(adv.get("max_tokens", 4096)), 8192)
-                for delta in _streamFromVertex(page_messages, VERTEX_CFG, page_adv):
+                page_finish_holder = []
+                for delta in _streamFromVertex(
+                    page_messages, VERTEX_CFG, page_adv, finish_reason_holder=page_finish_holder
+                ):
                     reformatted += delta
                     history[-1]["content"] = reformatted
                     yield history
                 page_meta["t_page_s"] = round(time.monotonic() - t1, 2)
+                page_meta["finish_reason_page"] = page_finish_holder[0] if page_finish_holder else None
                 if reformatted.strip():
                     final_text = reformatted
                     page_meta["page_applied"] = True

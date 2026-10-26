@@ -1,12 +1,22 @@
 # services/docs.py
 from datetime import datetime
 import os
+from xml.sax.saxutils import escape as _xmlEscape
 
 import fitz  # PyMuPDF
 from reportlab.lib.pagesizes import letter
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
+
+
+def _pdfSafeText(text: str) -> str:
+    """Escapa o texto pro mini-XML que o Paragraph do ReportLab entende
+    antes de inserir `<br/>` -- sem isso, qualquer `&algumacoisa;` no meio
+    do texto (comum em código C: `&variavel;`, ex. `scanf("%d", &x);`) é
+    interpretado como entidade XML e corrompe o PDF (achado real: nome de
+    variável virou um quadrado preto num PDF de aluna real)."""
+    return _xmlEscape(str(text)).replace("\n", "<br/>")
 
 
 def extractPdfText(filePath: str) -> str:
@@ -52,7 +62,7 @@ def createChatPdf(history, docsState):
             preview = (content[:600] +
                        "...") if len(content) > 600 else content
             body.append(Paragraph(
-                f"<b>{name}</b><br/>{preview.replace(chr(10), '<br/>')}", styles["Normal"]))
+                f"<b>{_xmlEscape(str(name))}</b><br/>{_pdfSafeText(preview)}", styles["Normal"]))
             body.append(Spacer(1, 0.1 * inch))
         body.append(PageBreak())
 
@@ -63,7 +73,7 @@ def createChatPdf(history, docsState):
             content = msg.get("content")
             if content is None:
                 continue
-            content = str(content).replace("\n", "<br/>")
+            content = _pdfSafeText(content)
             if role == "user":
                 body.append(Paragraph(f"<b>Usuário</b>: {content}", userStyle))
             elif role == "assistant":
@@ -71,7 +81,7 @@ def createChatPdf(history, docsState):
                     Paragraph(f"<b>Assistente</b>: {content}", asstStyle))
             else:
                 body.append(
-                    Paragraph(f"<b>{role or 'mensagem'}</b>: {content}", styles["Normal"]))
+                    Paragraph(f"<b>{_xmlEscape(str(role or 'mensagem'))}</b>: {content}", styles["Normal"]))
 
     doc.build(body)
     return outPath

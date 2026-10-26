@@ -73,7 +73,13 @@ def _messagesToTranscript(messages):
     return "\n\n".join(lines)
 
 
-def _streamFromVertex(messages, cfg, adv):
+def _streamFromVertex(messages, cfg, adv, finish_reason_holder=None):
+    """`finish_reason_holder`, se passado (lista mutável), recebe o
+    `finish_reason.name` do último chunk com candidato (ex.: "STOP",
+    "MAX_TOKENS") -- permite detectar corte por limite de tokens mesmo
+    quando o aluno não reclama no chat (achado real: duas respostas
+    cortadas só foram descobertas pela reclamação da aluna, sem esse
+    registro não dava pra saber se houve outras)."""
     model = _vertex_init_or_raise(cfg)
     transcript = _messagesToTranscript(messages)
     gen_cfg = {}
@@ -93,6 +99,10 @@ def _streamFromVertex(messages, cfg, adv):
             cands = getattr(chunk, "candidates", None) or []
             if not cands:
                 continue
+            if finish_reason_holder is not None:
+                finish_reason = getattr(cands[0], "finish_reason", None)
+                if finish_reason is not None:
+                    finish_reason_holder[:] = [getattr(finish_reason, "name", str(finish_reason))]
             parts = getattr(cands[0].content, "parts", []) or []
             for p in parts:
                 text = getattr(p, "text", None)
