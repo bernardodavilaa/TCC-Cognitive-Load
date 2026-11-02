@@ -27,12 +27,29 @@ class StudioView:
     clear_button: gr.Button
 
 
+_SESSION_EXPIRED_MSG = (
+    "⚠️ Sua sessão expirou (ficou inativo por muito tempo, ou o servidor "
+    "reiniciou enquanto a aba estava aberta). Recarregue a página (F5) e "
+    "faça login de novo pra continuar -- sem isso o chat não consegue "
+    "identificar quem você é, e nada do que for enviado agora fica "
+    "registrado."
+)
+
+
 def addMessage(history, message, docsState, authState, currentChatId, chatsState):
     """Handle user submissions, ingest PDF files and append to state."""
     if not isinstance(docsState, dict):
         docsState = {}
     if not isinstance(chatsState, dict):
         chatsState = {}
+
+    # A sessão do Gradio pode perder o estado (reinício do servidor, aba
+    # inativa por muito tempo) enquanto a tela de chat continua visível --
+    # achado real: aluno tentava continuar e o app não sabia mais quem
+    # ele era, travando sem aviso útil. Bloqueia aqui, antes de gastar uma
+    # chamada à IA numa sessão que não vai conseguir registrar nada.
+    if not (authState or {}).get("user_id"):
+        raise gr.Error(_SESSION_EXPIRED_MSG)
 
     chat_id = currentChatId or _mk_id("chat")
     if chat_id not in chatsState:

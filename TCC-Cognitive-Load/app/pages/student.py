@@ -65,7 +65,7 @@ from app.config import (
     SUPABASE_URL,
     SUPABASE_USERS_TABLE,
 )
-from app.pages.chat import addMessage, bot, clearChat
+from app.pages.chat import _SESSION_EXPIRED_MSG, addMessage, bot, clearChat
 from app.pages.history_shared import (
     HISTORY_TABLE_HEADERS,
     _format_timestamp,
@@ -1336,31 +1336,34 @@ def _student_track_exercise_turn(chats_state, current_chat_id, study_exercise):
     return study_exercise
 
 
-def student_toggle_exercise(study_participant, study_session, study_exercise):
+def student_toggle_exercise(study_participant, study_session, study_exercise, auth_state=None):
     """RF-B4: botão alterna estado pelo exercício aberto (não por um booleano
     de Checkbox — Checkbox.change() não disparava de forma confiável neste
     componente em testes automatizados; Button.click() é o padrão já usado
     com sucesso em todo o resto do app). 1º clique (sem exercício aberto)
     abre o registro; 2º clique (com exercício aberto) pergunta o desfecho.
-
-    KNOWN ISSUE (não resolvido): em testes locais via Playwright, o 1º
-    clique chama esta função (confirmado via log) com dados corretos, mas
-    `start_exercise(...)` nunca retorna nem levanta exceção dentro do
-    handler do Gradio -- apesar de a MESMA chamada, com os MESMOS IDs,
-    completar em ~2s quando feita fora do Gradio (script direto). Suspeita
-    não confirmada: contenção/deadlock no lock global `_client_lock` de
-    `services/supabase/common.py::_get_client`, que é compartilhado por
-    toda chamada Supabase do app. Até investigar com calma, trate a meta
-    de exercícios como opcional (`meta_exercicios=0` na config do estudo
-    real) para não bloquear a participação completa por essa funcionalidade."""
+    (O "known issue" de deadlock suspeito aqui foi investigado e descartado
+    -- a causa real do antigo travamento era um import faltando, já
+    corrigido; ver commit que adicionou start_exercise/end_exercise aos
+    imports.)"""
     if not study_participant or not (study_session or {}).get("id"):
+        # Dois cenários bem diferentes geram o mesmo estado vazio: (a) a
+        # sala não é do Modo Estudo (normal, mensagem genérica serve) ou
+        # (b) a sessão do navegador zerou (achado real: aluno fica um
+        # tempo sem interagir, a aba reconecta com estado limpo por trás
+        # mas a tela continua mostrando o chat) -- nesse caso a mensagem
+        # genérica confundia quem SABIA estar numa sala do estudo.
+        session_expired = not (auth_state or {}).get("user_id")
+        msg = _SESSION_EXPIRED_MSG if session_expired else (
+            "Warning: Modo exercício só funciona dentro de uma sala do Modo Estudo."
+        )
         return (
             study_exercise or {},
             gr.update(),
             gr.update(visible=False),
             gr.update(visible=False),
             gr.update(visible=False),
-            "Warning: Modo exercício só funciona dentro de uma sala do Modo Estudo.",
+            msg,
         )
 
     if not (study_exercise or {}).get("id"):
@@ -1547,7 +1550,12 @@ def student_end_chat(
         if warn:
             gr.Warning(message)
         else:
-            gr.Error(message)
+            # Faltava o `raise` -- `gr.Error(message)` sozinho só cria o
+            # objeto e descarta, sem mostrar nada ao aluno (confirmado na
+            # própria docstring da classe: precisa ser "raised"). Esses
+            # casos (PDF/Storage/Supabase falhando ao encerrar o chat)
+            # ficavam falhando em total silêncio.
+            raise gr.Error(message)
         return (
             gr.update(visible=True),
             gr.update(visible=False),
@@ -1562,7 +1570,7 @@ def student_end_chat(
 
     student_id = (auth_state or {}).get("user_id")
     if not student_id:
-        return _failure("Warning: Não foi possível identificar o aluno logado.", warn=True)
+        return _failure(_SESSION_EXPIRED_MSG, warn=True)
 
     is_class_chat = bool(selected_class)
     if not is_class_chat and not selected_theme_text:
@@ -1814,7 +1822,7 @@ def student_submit_evaluation(
     context = chat_context if isinstance(chat_context, dict) else {}
 
     if not student_id:
-        gr.Warning("Não foi possível identificar o aluno logado; avaliação não salva.")
+        gr.Warning(_SESSION_EXPIRED_MSG)
         return gr.update(visible=False), gr.update(visible=True), ""
 
     try:
@@ -2458,7 +2466,7 @@ def build_student_views(
 
     stExerciseToggle.click(
         student_toggle_exercise,
-        inputs=[study_participant_state, study_session_state, study_exercise_state],
+        inputs=[study_participant_state, study_session_state, study_exercise_state, auth_state],
         outputs=[study_exercise_state, stExerciseToggle, stExerciseOutcome,
                  stExerciseReason, stExerciseConfirm, stExerciseMsg],
     ).then(
