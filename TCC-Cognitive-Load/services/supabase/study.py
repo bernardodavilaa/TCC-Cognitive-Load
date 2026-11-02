@@ -541,6 +541,54 @@ def admin_validate_session(url: str, key: str, session_id: str, *, note: Optiona
     return (resp.data or [{"is_valid": True}])[0]
 
 
+def admin_validate_exercise(
+    url: str, key: str, exercise_id: str, *, status: str = "concluido", note: Optional[str] = None
+) -> Dict[str, Any]:
+    """Validação manual pelo admin, espelhando `admin_validate_session`:
+    marca um exercício como concluído mesmo que a contagem de mensagens no
+    chat não bata com o mínimo (RN-4) -- caso real: aluno resolveu o
+    exercício de fato (confirmado fora do app, ex. WhatsApp) mas não
+    narrou o raciocínio nas mensagens, ou a sessão foi abandonada com o
+    exercício ainda `em_andamento` e nunca chegou a ser fechado."""
+    client = _get_client(url, key)
+    try:
+        current = client.table("study_exercises").select("*").eq("id", exercise_id).limit(1).execute()
+        payload: Dict[str, Any] = {"status": status}
+        row0 = (current.data or [{}])[0]
+        if not row0.get("ended_at"):
+            payload["ended_at"] = _now_iso()
+        resp = client.table("study_exercises").update(payload).eq("id", exercise_id).execute()
+    except APIError as err:
+        raise _handle_api_error(err) from err
+    except Exception as exc:
+        raise SupabaseOperationError(str(exc)) from exc
+
+    row = (current.data or [{}])[0]
+    if row.get("participant_id"):
+        try:
+            session = (
+                client.table("study_sessions")
+                .select("classroom_id,effective_group")
+                .eq("id", row.get("session_id"))
+                .limit(1)
+                .execute()
+            )
+            session_row = (session.data or [{}])[0]
+            log_study_event(
+                url, key,
+                participant_id=row["participant_id"],
+                classroom_id=session_row.get("classroom_id"),
+                effective_group=session_row.get("effective_group", "controle"),
+                event_type="exercise_end",
+                session_id=row.get("session_id"),
+                exercise_id=exercise_id,
+                meta={"admin_manual_validation": True, "status": status, "note": note},
+            )
+        except Exception:
+            pass
+    return (resp.data or [{"status": status}])[0]
+
+
 def fetch_pending_evaluation_session(url: str, key: str, participant_id: str) -> Optional[Dict[str, Any]]:
     """RF-B3: sessão encerrada sem avaliação, pra exibir no próximo login
     antes de abrir qualquer novo chat."""
@@ -931,6 +979,7 @@ __all__ = [
     "fetch_pending_evaluation_session",
     "close_abandoned_sessions",
     "admin_validate_session",
+    "admin_validate_exercise",
     "log_study_event",
     "start_exercise",
     "end_exercise",

@@ -11,6 +11,7 @@ import gradio as gr
 from services.supabase_client import (
     SupabaseConfigurationError,
     SupabaseOperationError,
+    admin_validate_exercise,
     admin_validate_session,
     create_classroom_record,
     create_subject_record,
@@ -1116,6 +1117,26 @@ def researcher_validate_session(session_id, note, auth):
     return f"OK: Sessão {session_id} marcada como válida."
 
 
+def researcher_validate_exercise(exercise_id, note, auth):
+    """Validação manual de exercício -- cobre casos como aluno que
+    resolveu o exercício de fato (confirmado fora do app) mas não narrou
+    o raciocínio no chat, ou deixou o exercício aberto (em_andamento) sem
+    nunca fechar o desfecho."""
+    if not _is_admin(auth):
+        return "⛔ Apenas o pesquisador/admin pode validar exercícios."
+    exercise_id = (exercise_id or "").strip()
+    if not exercise_id:
+        return "Warning: Informe o id do exercício."
+    try:
+        admin_validate_exercise(
+            SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, exercise_id,
+            status="concluido", note=(note or "").strip() or None,
+        )
+    except Exception as exc:
+        return f"ERROR: Não foi possível validar: {exc}"
+    return f"OK: Exercício {exercise_id} marcado como concluído."
+
+
 def researcher_panel_refresh(cls_id, auth):
     if not _is_admin(auth):
         return "⛔ Apenas o pesquisador/admin pode acessar este painel.", "", ""
@@ -1234,6 +1255,17 @@ def build_admin_views(
             rpSessionNote = gr.Textbox(label="Motivo (opcional)")
             rpValidateSession = gr.Button("✅ Validar sessão")
         rpValidateMsg = gr.Markdown("")
+        gr.Markdown(
+            "#### Validar exercício manualmente\n"
+            "Use quando o aluno confirma (fora do app) que resolveu o "
+            "exercício mas não narrou o raciocínio no chat, ou quando um "
+            "exercício ficou aberto (em_andamento) sem nunca ser fechado."
+        )
+        with gr.Row():
+            rpExerciseId = gr.Textbox(label="ID do exercício (study_exercises.id)")
+            rpExerciseNote = gr.Textbox(label="Motivo (opcional)")
+            rpValidateExercise = gr.Button("✅ Validar exercício")
+        rpValidateExerciseMsg = gr.Markdown("")
         with gr.Row():
             adminPgBack = gr.Button("← Voltar à Home do Admin")
 
@@ -1433,6 +1465,12 @@ def build_admin_views(
         researcher_validate_session,
         inputs=[rpSessionId, rpSessionNote, auth_state],
         outputs=rpValidateMsg,
+    )
+
+    rpValidateExercise.click(
+        researcher_validate_exercise,
+        inputs=[rpExerciseId, rpExerciseNote, auth_state],
+        outputs=rpValidateExerciseMsg,
     )
 
     btnAddClass.click(

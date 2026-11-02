@@ -1081,6 +1081,7 @@ def student_apply_setup(
             gr.update(visible=False),
             gr.update(),
             gr.update(),
+            gr.update(visible=False),
         )
 
     interesses, interesses_estruturado = serialize_interests(interesse_chips, details_by_theme)
@@ -1180,6 +1181,12 @@ def student_apply_setup(
             config = fetch_latest_study_config(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, cid) or {}
             if int(config.get("meta_exercicios", 1)) > 0:
                 exercise_btn_update = gr.update(visible=True)
+            # Guardado aqui (sem precisar buscar a config de novo a cada
+            # turno) pro indicador visível de progresso da sessão -- achado
+            # real: aluno engajado não sabia que faltava 1 mensagem pra uma
+            # sessão valer, e os marcadores não refletiam o uso dele.
+            study_session["min_msgs_for_valid"] = int(config.get("sessao_min_msg_aluno", 6))
+            study_session["min_exercise_msgs"] = int(config.get("ex_min_msg_aluno", 3))
             # Mede o esforço de preencher a configuração da sala: tempo entre
             # a tela aparecer (student_go_setup/student_submit_study_intro) e
             # o aluno clicar em "Aplicar Configuração da Sala".
@@ -1214,6 +1221,7 @@ def student_apply_setup(
         exercise_btn_update,
         interesses,
         interesses_estruturado,
+        _render_session_progress_md(study_session),
     )
 
 
@@ -1281,6 +1289,35 @@ def _student_track_study_turn(chats_state, current_chat_id, study_participant, s
     study_session["student_message_count"] = msg_count
     study_session["last_activity_ts"] = now_ts
     return study_session
+
+
+def _render_session_progress_md(study_session, study_exercise=None):
+    """Indicador visível, dentro da própria sessão, de quantas mensagens
+    faltam pra ela valer (RN-2) -- achado real: aluno bem engajado não
+    fazia ideia de que tinha ficado 1 mensagem abaixo do mínimo em duas
+    sessões, porque nada no app mostrava isso em nenhum momento."""
+    session_id = (study_session or {}).get("id")
+    if not session_id:
+        return gr.update(visible=False)
+
+    min_msgs = int((study_session or {}).get("min_msgs_for_valid") or 6)
+    count = int((study_session or {}).get("student_message_count") or 0)
+    parts = []
+    if count >= min_msgs:
+        parts.append(f"✅ Sessão já vale ({count}/{min_msgs} mensagens)")
+    else:
+        falta = min_msgs - count
+        parts.append(f"💬 {count}/{min_msgs} mensagens nesta sessão (faltam {falta} pra ela contar)")
+
+    if (study_exercise or {}).get("id"):
+        min_ex = int((study_session or {}).get("min_exercise_msgs") or 3)
+        ex_count = int((study_exercise or {}).get("message_count") or 0)
+        if ex_count >= min_ex:
+            parts.append(f"✅ Exercício atual já vale ({ex_count}/{min_ex})")
+        else:
+            parts.append(f"📝 {ex_count}/{min_ex} mensagens no exercício atual")
+
+    return gr.update(visible=True, value=" · ".join(parts))
 
 
 def _student_track_exercise_turn(chats_state, current_chat_id, study_exercise):
@@ -1385,7 +1422,9 @@ def student_confirm_exercise_outcome(outcome, reason, study_participant, study_s
         return {}, btn_reset, gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), ""
 
     if outcome == "Continuar" or not outcome:
-        return study_exercise, btn_keep, gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), ""
+        cleared = dict(study_exercise)
+        cleared.pop("low_msg_warned", None)
+        return cleared, btn_keep, gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), ""
 
     status = "concluido" if outcome == "Concluí" else "desistiu"
     msg_count = int(study_exercise.get("message_count") or 0)
@@ -1395,6 +1434,29 @@ def student_confirm_exercise_outcome(outcome, reason, study_participant, study_s
             SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, study_session.get("classroom_id")
         ) or {}
         min_msgs = int(config.get("ex_min_msg_aluno", 3))
+        # Em vez de rebaixar em silêncio (achado real: aluno clicou "Concluí"
+        # com 0-2 mensagens 6x seguidas, achando que tinha contado, e nunca
+        # ficou sabendo) -- avisa e dá a chance de continuar no exercício.
+        # Só fecha direto se o aluno já viu o aviso e confirmou de novo.
+        if status == "concluido" and msg_count < min_msgs and not study_exercise.get("low_msg_warned"):
+            gr.Warning(
+                f"Você registrou {msg_count} mensagem(ns) neste exercício -- "
+                f"são necessárias pelo menos {min_msgs} pra contar como concluído. "
+                "Clique em \"Confirmar\" de novo pra fechar assim mesmo (conta como "
+                "\"interrompido\"), ou escolha \"Continuar\" pra escrever mais sobre "
+                "sua resolução antes de encerrar."
+            )
+            warned = dict(study_exercise)
+            warned["low_msg_warned"] = True
+            return (
+                warned,
+                btn_keep,
+                gr.update(visible=True, value=None),
+                gr.update(visible=True, value=reason or ""),
+                gr.update(visible=True),
+                f"⚠️ {msg_count}/{min_msgs} mensagens registradas neste exercício -- "
+                "confirme de novo pra fechar mesmo assim, ou escolha \"Continuar\".",
+            )
         if status == "concluido" and msg_count < min_msgs:
             status = "interrompido"
         end_exercise(
@@ -2150,6 +2212,7 @@ def build_student_views(
                     sources=chat_sources,
                     interactive=True,
                 )
+                stSessionProgress = gr.Markdown("", visible=False)
                 #with gr.Row():
                 #    stClear = gr.Button("Limpar chat")
                 with gr.Row():
@@ -2361,7 +2424,7 @@ def build_student_views(
         ],
         outputs=[script_state, stCfgCol, stChatCol, page_profile_state,
                  study_session_state, stExerciseToggle, interesse_text_state,
-                 interesse_estruturado_state],
+                 interesse_estruturado_state, stSessionProgress],
     ).then(
         lambda: gr.update(interactive=True, value="Aplicar Configuração da Sala"),
         outputs=stSubmit,
@@ -2387,6 +2450,10 @@ def build_student_views(
         _student_track_exercise_turn,
         inputs=[chats_state, current_chat_id, study_exercise_state],
         outputs=study_exercise_state,
+    ).then(
+        _render_session_progress_md,
+        inputs=[study_session_state, study_exercise_state],
+        outputs=stSessionProgress,
     ).then(_student_chat_enable, outputs=stChatInput)
 
     stExerciseToggle.click(
@@ -2394,6 +2461,10 @@ def build_student_views(
         inputs=[study_participant_state, study_session_state, study_exercise_state],
         outputs=[study_exercise_state, stExerciseToggle, stExerciseOutcome,
                  stExerciseReason, stExerciseConfirm, stExerciseMsg],
+    ).then(
+        _render_session_progress_md,
+        inputs=[study_session_state, study_exercise_state],
+        outputs=stSessionProgress,
     )
 
     stExerciseConfirm.click(
@@ -2402,6 +2473,10 @@ def build_student_views(
                 study_session_state, study_exercise_state],
         outputs=[study_exercise_state, stExerciseToggle, stExerciseOutcome,
                  stExerciseReason, stExerciseConfirm, stExerciseMsg],
+    ).then(
+        _render_session_progress_md,
+        inputs=[study_session_state, study_exercise_state],
+        outputs=stSessionProgress,
     )
 
     #stClear.click(clearChat, outputs=stChatbot)
