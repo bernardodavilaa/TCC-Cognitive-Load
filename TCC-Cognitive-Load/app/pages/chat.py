@@ -220,8 +220,22 @@ def bot(history, docsState, scriptState, advState, currentChatId, chatsState, pa
                 if first_user_msg:
                     chatsState[currentChatId]["title"] = first_user_msg[:40]
     except Exception as e:
-        history[-1]["content"] = f"[ERRO Vertex: {e}]"
+        # O erro técnico cru (ex.: billing do GCP, quota, rede) nunca deve
+        # chegar ao aluno -- caso real: um aluno levou isso na tela 2x
+        # seguidas, sem conseguir estudar pra prova, e ninguém percebeu até
+        # vasculhar o PDF da conversa dele. Log completo fica só no console
+        # pro pesquisador; a tela mostra algo acionável.
+        print(f"[VERTEX] Falha na geração ({type(e).__name__}): {e}")
+        history[-1]["content"] = (
+            "⚠️ O tutor está temporariamente indisponível (problema técnico "
+            "do nosso lado, não é nada que você tenha feito). Tente de novo "
+            "em alguns minutos -- se continuar falhando, chama o Bernardo "
+            "pelo contato que está na tela de login."
+        )
+        page_meta["error"] = True
+        page_meta["t_total_s"] = round(time.monotonic() - t_start, 2)
         if currentChatId and isinstance(chatsState, dict) and currentChatId in chatsState:
+            chatsState[currentChatId]["last_turn_page_meta"] = page_meta
             chatsState[currentChatId]["messages"].append(
                 {
                     "role": "assistant",
