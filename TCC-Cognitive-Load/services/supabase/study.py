@@ -497,6 +497,7 @@ def close_abandoned_sessions(
 
     min_active_s = int(config.get("sessao_min_ativo_min", 10)) * 60
     min_msgs = int(config.get("sessao_min_msg_aluno", 6))
+    ex_min_msgs = int(config.get("ex_min_msg_aluno", 3))
     closed = []
     for session in resp.data or []:
         is_valid = (
@@ -507,7 +508,81 @@ def close_abandoned_sessions(
             url, key, session["id"], end_reason="idle_timeout", is_valid=is_valid
         )
         closed.append(updated)
+        close_open_exercise_for_session(
+            url, key,
+            session_id=session["id"],
+            participant_id=session.get("participant_id"),
+            classroom_id=session.get("classroom_id"),
+            effective_group=session.get("effective_group", "controle"),
+            ex_min_msgs=ex_min_msgs,
+        )
     return closed
+
+
+def close_open_exercise_for_session(
+    url: str,
+    key: str,
+    *,
+    session_id: str,
+    participant_id: Optional[str],
+    classroom_id: Optional[str],
+    effective_group: str,
+    ex_min_msgs: int,
+) -> None:
+    """RF-B4: quando a sessão fecha (idle timeout ou "Encerrar Chat") sem o
+    aluno nunca ter clicado "Encerrar exercício", o registro em
+    study_exercises ficava 'em_andamento'/student_message_count=0 pra
+    sempre -- mesmo quando ele mandou mensagens reais em modo exercício
+    (contagem só era sincronizada no fluxo manual de 2 cliques). Acha o(s)
+    exercício(s) ainda abertos da sessão e fecha com a contagem real, tirada
+    de study_events (fonte que não se perde quando a aba fecha). Chamada
+    tanto por close_abandoned_sessions quanto por student_end_chat."""
+    client = _get_client(url, key)
+    try:
+        open_exercises = (
+            client.table("study_exercises")
+            .select("id")
+            .eq("session_id", session_id)
+            .eq("status", "em_andamento")
+            .execute()
+        )
+    except APIError as err:
+        raise _handle_api_error(err) from err
+    except Exception as exc:
+        raise SupabaseOperationError(str(exc)) from exc
+
+    for exercise in open_exercises.data or []:
+        try:
+            events = (
+                client.table("study_events")
+                .select("id")
+                .eq("session_id", session_id)
+                .eq("event_type", "message")
+                .eq("message_category", "exercicio")
+                .execute()
+            )
+            msg_count = len(events.data or [])
+            status = "concluido" if msg_count >= ex_min_msgs else "interrompido"
+            end_exercise(
+                url, key, exercise["id"], status=status, student_message_count=msg_count
+            )
+            if participant_id and classroom_id:
+                log_study_event(
+                    url, key,
+                    participant_id=participant_id,
+                    classroom_id=classroom_id,
+                    effective_group=effective_group,
+                    event_type="exercise_end",
+                    session_id=session_id,
+                    exercise_id=exercise["id"],
+                    meta={
+                        "status": status,
+                        "student_message_count": msg_count,
+                        "auto_closed_on_session_abandon": True,
+                    },
+                )
+        except Exception as exc:  # pragma: no cover - não deve bloquear o fechamento da sessão
+            print(f"[STUDY] Falha ao fechar exercício abandonado {exercise.get('id')}: {exc}")
 
 
 def admin_validate_session(url: str, key: str, session_id: str, *, note: Optional[str] = None) -> Dict[str, Any]:
@@ -984,6 +1059,7 @@ __all__ = [
     "start_exercise",
     "end_exercise",
     "fetch_open_exercise",
+    "close_open_exercise_for_session",
     "compute_participation",
     "fetch_final_questionnaire",
     "submit_final_questionnaire",

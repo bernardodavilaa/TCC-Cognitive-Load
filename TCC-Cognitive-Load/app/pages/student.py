@@ -28,6 +28,7 @@ from services.supabase_client import (
     allocate_participant,
     classify_message,
     close_abandoned_sessions,
+    close_open_exercise_for_session,
     close_study_session,
     compute_participation,
     create_chat_record,
@@ -1781,6 +1782,19 @@ def student_end_chat(
                 event_type="session_end",
                 session_id=study_session["id"],
                 meta={"end_reason": "manual", "is_valid": activity_ok},
+            )
+            # RF-B4: "Encerrar Chat" também fecha a sessão -- sem isso, um
+            # exercício ainda aberto nesse momento (aluno não clicou
+            # "Encerrar exercício" antes) ficava 'em_andamento' pra sempre,
+            # igual ao caso resolvido em close_abandoned_sessions.
+            close_open_exercise_for_session(
+                SUPABASE_URL,
+                SUPABASE_SERVICE_ROLE_KEY,
+                session_id=study_session["id"],
+                participant_id=study_participant["id"],
+                classroom_id=selected_class,
+                effective_group=study_session.get("effective_group", "controle"),
+                ex_min_msgs=int(config.get("ex_min_msg_aluno", 3)),
             )
         except Exception as exc:  # pragma: no cover - não deve bloquear o chat
             print(f"[STUDY] Falha ao encerrar sessão do estudo: {exc}")
